@@ -188,7 +188,7 @@ Cost, with numbers from the code:
   that is gone, and the whole folder when the editor of the last instance of the document closes. A prepared file is removed only
   inside `.prepared/`. Rule of size (ruling R11): at each wake the worker removes every set whose row or kind no longer exists
   and every temporary file; the folder is bounded at 2 GiB: a job whose file would take the folder over that sum fails with `error:
-  prepared files exceed 2 GB`. `.prepared/` is a fixed child of the default folder written only by the plugin; no user path reaches
+  prepared items exceed 2 GB`. `.prepared/` is a fixed child of the default folder written only by the plugin; no user path reaches
   it, and the exact-path rule for user destinations (#579) does not change. A file name is made by `file_stems` from the row name, so
   a hostile row name (`../x`, `/abs`, empty, 300 characters) stays one safe name inside the folder; a fault run proves the stage can see a name that leaves it.
 
@@ -237,7 +237,7 @@ New shell commands (plugin shell commands like `plugin_host_regions`, listed in 
 
 The limit of the drag command is 64 files (`start_drag_command`). "Drag all" of 22 or more rows with three kinds exceeds it, so
 the limit goes to 512 (ruling R6, unit test of the bound). A request over the bound is an error state with the reason (`error:
-more than 512 files`), no partial drag. "Drag all" (MIDI and wav in one drag) stays and is a hand check.
+more than 512 items in one drag`), no partial drag. "Drag all" (MIDI and wav in one drag) stays and is a hand check.
 
 ## 8. Faults and gate safety
 
@@ -271,7 +271,7 @@ the user and for the page text: choose "current tempo map".
   host's tempo. The risk is higher than the gain. PROPOSAL, not built: keep the tempo track. Do not build the file without the
   coordinator's word.
 - The page text for the handles (a hint under the toolbar handles, shown while the MIDI kind is on): "If your DAW asks about the
-  tempo of the MIDI file, choose the current tempo map."
+  tempo of this MIDI, choose the current tempo map."
 - What is not known: which of the three sources a real LUNA session gives (the row `musical_context` of the report says); and
   whether LUNA reads a tempo track of a dropped file at all in the way it asks (hand check, M1c1 step 5).
 
@@ -374,7 +374,7 @@ One commit per line or pair, risky parts first. This note is commit 1 (Gate line
 - The only change outside `plugins/ara` and `static/` is `merged_midi_bytes` and `export_merged_midi` in `crates/core/src/midi.rs` (about 55
   lines with doc comments, two unit tests; nothing in `crates/app`).
 - `plugin_deliver_state` starts the worker once; a poll of the page wakes nothing (the page asks again every 1.5 s while a handle is `preparing`).
-- The drag limit is 512 files (`deliver::drag_count_ok`, unit test); `plugin_deliver_take` refuses more with `error: more than 512 files`.
+- The drag limit is 512 files (`deliver::drag_count_ok`, unit test); `plugin_deliver_take` refuses more with `error: more than 512 items in one drag`.
 - A dropped row (`HT.dropped`) is named in the hint line beside the toolbar handles (R10).
 - Stage `deliver` (parts `deliver-ran`, `-rows`, `-wav`, `-size`, `-merged`, `-state`, `-drag`, `-prepared-folder`, `-handles`, `-stale`, `-cost`,
   `-watchdog`, `-hostile-name`) and `deliver-fault` (faults `per-source`, `two-tracks`, `stale-ok`, `all-rows`, `no-debounce`, `forever` with

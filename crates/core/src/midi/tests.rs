@@ -793,8 +793,10 @@ fn a_multi_track_file_refuses_a_bad_note_a_bad_velocity_and_writes_the_path() {
 fn the_merged_file_of_one_drum_is_the_per_drum_file_byte_for_byte() {
     // #576: the merged writer is the per-drum writer for one drum, on the default map and on a map with a step
     let evs = [ev(0.5, 90), ev(0.52, 100), ev(1.25, 64)];
-    let mut stepped = TempoMap::default();
-    stepped.bpm = 100.0;
+    let stepped = TempoMap {
+        bpm: 100.0,
+        ..TempoMap::default()
+    };
     for (map, ppq) in [(TempoMap::default(), DEFAULT_PPQ), (stepped, 480)] {
         let one = MidiTrack {
             name: "x",

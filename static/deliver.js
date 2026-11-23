@@ -15,7 +15,7 @@ const DLV = {
 };
 const DLV_KINDS = [["midi", "MIDI", "MIDI"], ["spike", "Spike", "Spike"], ["audio", "Audio spike", "Audio spike"]];
 const DLV_HINT = "Drop at the start of the session";
-const DLV_TEMPO = "If your DAW asks about the tempo of the MIDI file, choose the current tempo map.";
+const DLV_TEMPO = "If your DAW asks about the tempo of this MIDI, choose the current tempo map.";
 
 DLV.fault = "";   // the fault run of the check (leak: the handles show without the mode); never set by the page itself
 DLV.live = () => hostMode() || DLV.fault === "leak";
@@ -36,11 +36,11 @@ DLV.text = function (s) {
   if (s.state === "preparing") return "preparing…";
   if (s.state === "off") return "press to prepare";
   if (s.state === "none") return "no hits";
-  const w = `error: ${s.why || "the files could not be prepared"}`;
+  const w = `error: ${s.why || "could not be prepared"}`;
   return w.length > 40 ? w.slice(0, 37) + "…" : w;
 };
-DLV.title = function (label, s, extra) {
-  const why = s.state === "error" ? `error: ${s.why}` : s.state === "none" ? "no hits" : s.state === "off" ? "press to prepare (a press starts it)" : s.state === "preparing" ? "preparing: the files are made in the background" : `ready: ${s.n} file${s.n === 1 ? "" : "s"}. Drag it into your DAW`;
+DLV.title = function (label, s, extra) {   // no word "file" or "folder" in what the user reads (the host page test of the visible words)
+  const why = s.state === "error" ? `error: ${s.why}` : s.state === "none" ? "no hits" : s.state === "off" ? "press to prepare (a press starts it)" : s.state === "preparing" ? "preparing: made in the background" : `ready (${s.n}). Drag it into your DAW`;
   return `${label}: ${why}. ${DLV_HINT}.${extra ? " " + extra : ""}`;
 };
 
@@ -87,7 +87,7 @@ DLV.drag = async function (items) {
   let files;
   try { files = (await B.deliverTake(items)).files; }
   catch (e) { setMsg(`drag refused: ${errText(e)}`, "error"); DLV.pull(); return; }
-  B.dragFiles(files).then(() => setMsg(`dragged ${files.length} file${files.length === 1 ? "" : "s"}: ${DLV_HINT.toLowerCase()}`))
+  B.dragFiles(files).then(() => setMsg(`dragged ${files.length} item${files.length === 1 ? "" : "s"}: ${DLV_HINT.toLowerCase()}`))
     .catch(e => setMsg(`drag failed: ${errText(e)}`, "error"));
 };
 
@@ -110,7 +110,7 @@ DLV.strip = function (rowEl, name) {
     // one handle (the first kind that is ready, MIDI then Spike) and a small menu with the three
     const pick = () => { const r = DLV.rowFor(name) || row; return ["midi", "spike", "audio"].find(k => r[k].state === "ready") || "midi"; };
     const one = DLV.handle("Drag", "one", () => { const r = DLV.rowFor(name) || row; return r[pick()]; }, () => DLV.rowItems(DLV.rowFor(name) || row, [pick()]));
-    const more = document.createElement("button"); more.className = "btn mini dlvM"; more.textContent = "…"; more.title = "The three kinds of files of this DAW track";
+    const more = document.createElement("button"); more.className = "btn mini dlvM"; more.textContent = "…"; more.title = "The three kinds of this DAW track";
     more.onclick = ev => {
       const r = DLV.rowFor(name) || row, b = more.getBoundingClientRect();
       openCtxItems(DLV_KINDS.map(([k, label]) => [k, `${label}: ${DLV.text(r[k])}`, () => { if (r[k].state === "off") DLV.want(k); else if (r[k].state === "ready") DLV.drag(DLV.rowItems(r, [k])); }]), b.left, b.bottom);
@@ -143,7 +143,7 @@ DLV.bar = function () {
   const hint = document.createElement("span"); hint.id = "dlvHint"; hint.className = "dlvHint"; hint.textContent = DLV_HINT;
   bar._hs = hs; bar._hint = hint;
   if (innerWidth < 520) {
-    const more = document.createElement("button"); more.className = "btn mini dlvM"; more.textContent = "Drag…"; more.title = "Drag the prepared files into your DAW";
+    const more = document.createElement("button"); more.className = "btn mini dlvM"; more.textContent = "Drag…"; more.title = "Drag the prepared items into your DAW";
     more.onclick = ev => {
       const b = more.getBoundingClientRect();
       openCtxItems(hs.map(h => [h.dataset.kind, `${h.querySelector(".dlvL").textContent}: ${h.querySelector(".dlvT").textContent}`, () => h.dispatchEvent(new MouseEvent("mousedown", { button: 0, clientX: 0, clientY: 0, bubbles: true }))]), b.left, b.bottom);

@@ -293,7 +293,7 @@ fn home_wav(row: &RowIn) -> Result<&Path, String> {
     row.srcs
         .first()
         .and_then(|s| s.wav.as_deref())
-        .ok_or_else(|| format!("no audio file for {}", row.name))
+        .ok_or_else(|| format!("no audio for {}", row.name))
 }
 
 /// The synthetic spike file of one row: the times of every source, the rate and format of the first source.
@@ -339,7 +339,7 @@ pub fn write_audio_row(row: &RowIn, out: &Path) -> Result<(), String> {
         let wav = s
             .wav
             .as_deref()
-            .ok_or_else(|| format!("no audio file for {}", row.name))?;
+            .ok_or_else(|| format!("no audio for {}", row.name))?;
         let pairs = song_pairs(&s.events, &regions_of(row, &s.key));
         return write_audio_spike_file_song(wav, out, &pairs, end)
             .map(|_| ())
@@ -349,7 +349,7 @@ pub fn write_audio_row(row: &RowIn, out: &Path) -> Result<(), String> {
     let mut rate = 0;
     let mut format = WavFormat::Float32;
     for (i, s) in used.iter().enumerate() {
-        let wav = s.wav.as_deref().ok_or_else(|| format!("no audio file for {}", s.key))?;
+        let wav = s.wav.as_deref().ok_or_else(|| format!("no audio for {}", s.key))?;
         let tmp = out.with_extension(format!("part{i}.tmp"));
         let pairs = song_pairs(&s.events, &regions_of(row, &s.key));
         let r = write_audio_spike_file_song(wav, &tmp, &pairs, end).map_err(|e| e.message);
@@ -793,7 +793,7 @@ impl Prep {
             }
         }
         if out.len() > MAX_DRAG_FILES {
-            return Err((413, format!("error: more than {MAX_DRAG_FILES} files in one drag")));
+            return Err((413, format!("error: more than {MAX_DRAG_FILES} items in one drag")));
         }
         Ok(out)
     }
@@ -995,12 +995,12 @@ fn make(g: &Gathered, key: &Key, exports: &Path, prepared: &Path) -> Result<(Vec
     let others = dir_size(prepared).saturating_sub(std::fs::metadata(&out).map_or(0, |m| m.len()));
     if over_cap(others, size) {
         let _ = std::fs::remove_file(&tmp);
-        return Err("prepared files exceed 2 GB".into());
+        return Err("prepared items exceed 2 GB".into());
     }
     std::fs::rename(&tmp, &out).map_err(|e| format!("{}: {e}", out.display()))?;
     let fin = exports.join(&name);
     if fin.parent() != Some(exports) {
-        return Err("the file name leaves the folder".into());
+        return Err("the name is not allowed".into());
     }
     let _ = std::fs::remove_file(&fin);
     if std::fs::hard_link(&out, &fin).is_err() {
