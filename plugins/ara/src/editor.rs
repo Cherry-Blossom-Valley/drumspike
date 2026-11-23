@@ -944,10 +944,19 @@ fn defaults_command(cmd: &str, args: &Value) -> Answer {
             let l = ud::current();
             let (status, why) = match &l.status {
                 ud::Status::Ok if l.bad.is_empty() => ("ok", String::new()),
-                ud::Status::Ok => ("damaged", "Some values in the defaults file are not valid; built-in values are used for them.".into()),
+                ud::Status::Ok => (
+                    "damaged",
+                    "Some values in the defaults file are not valid; built-in values are used for them.".into(),
+                ),
                 ud::Status::None => ("none", String::new()),
-                ud::Status::Damaged(_) => ("damaged", "The defaults file is damaged; built-in values are used.".into()),
-                ud::Status::Newer => ("newer", "The defaults file is from a newer version of the plugin; it is read, never changed.".into()),
+                ud::Status::Damaged(_) => (
+                    "damaged",
+                    "The defaults file is damaged; built-in values are used.".into(),
+                ),
+                ud::Status::Newer => (
+                    "newer",
+                    "The defaults file is from a newer version of the plugin; it is read, never changed.".into(),
+                ),
             };
             let presets: Vec<Value> = ud::list_at(&dir)
                 .into_iter()
@@ -976,7 +985,11 @@ fn defaults_command(cmd: &str, args: &Value) -> Answer {
             Ok(()) => Answer::json(200, &json!({"role": text("role")})),
             Err(m) => Answer::err(409, m),
         },
-        "plugin_preset_save" => match ud::save_preset_at(&dir, &text("name"), &roles_arg(args.get("roles").unwrap_or(&Value::Null))) {
+        "plugin_preset_save" => match ud::save_preset_at(
+            &dir,
+            &text("name"),
+            &roles_arg(args.get("roles").unwrap_or(&Value::Null)),
+        ) {
             Ok(()) => Answer::json(200, &json!({"name": text("name").trim()})),
             Err(m) => Answer::err(409, m),
         },

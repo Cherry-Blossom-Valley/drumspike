@@ -48,6 +48,22 @@ fn fault() -> String {
 /// (Fault `real-path`: the real folder in a gate build too; the stage runs it with `HOME` below `out/`.)
 #[must_use]
 pub fn dir() -> Option<PathBuf> {
+    // a unit-test build never resolves the real folder, whatever the features: only the variable of the test decides
+    #[cfg(test)]
+    {
+        std::env::var("DS_ARA_USER_DIR")
+            .ok()
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+    }
+    #[cfg(not(test))]
+    {
+        dir_outside_tests()
+    }
+}
+
+#[cfg(not(test))]
+fn dir_outside_tests() -> Option<PathBuf> {
     #[cfg(feature = "test-switches")]
     {
         if let Ok(v) = crate::test_switch("DS_ARA_USER_DIR") {
@@ -56,7 +72,10 @@ pub fn dir() -> Option<PathBuf> {
             }
         }
         if fault() != "real-path" {
-            once_row("path-refused", json!({"event": "defaults_path_refused", "folder": FOLDER_WORD}));
+            once_row(
+                "path-refused",
+                json!({"event": "defaults_path_refused", "folder": FOLDER_WORD}),
+            );
             return None;
         }
     }
@@ -65,7 +84,12 @@ pub fn dir() -> Option<PathBuf> {
 
 fn real_dir() -> Option<PathBuf> {
     let home = std::env::var("HOME").ok().filter(|h| !h.is_empty())?;
-    Some(PathBuf::from(home).join("Library").join("Application Support").join(FOLDER))
+    Some(
+        PathBuf::from(home)
+            .join("Library")
+            .join("Application Support")
+            .join(FOLDER),
+    )
 }
 
 /// The real folder (for the unit test that a test build never resolves it).
@@ -198,7 +222,10 @@ pub fn roles_of(v: &Value, base: &str, bad: &mut Vec<String>) -> BTreeMap<String
             continue;
         };
         let notes = notes_of(e, &path, bad);
-        let params = e.get("params").map(|p| params_of(p, &format!("{path}.params"), bad)).unwrap_or_default();
+        let params = e
+            .get("params")
+            .map(|p| params_of(p, &format!("{path}.params"), bad))
+            .unwrap_or_default();
         if !notes.is_empty() || !params.is_empty() {
             out.insert(role.clone(), RoleEntry { notes, params });
         }
@@ -386,7 +413,13 @@ fn trusting(bytes: &[u8]) -> Loaded {
                     .and_then(Value::as_i64)
                     .map(|n| vec![n as u8])
                     .unwrap_or_default();
-                l.checked.roles.insert(role.clone(), RoleEntry { notes, params: Map::new() });
+                l.checked.roles.insert(
+                    role.clone(),
+                    RoleEntry {
+                        notes,
+                        params: Map::new(),
+                    },
+                );
             }
         }
     }
@@ -508,7 +541,9 @@ pub fn save_role_at(dir: &Path, role: &str, entry: Option<&RoleEntry>) -> Result
     let path = dir.join("defaults.json");
     let cur = load_at(dir);
     if cur.status == Status::Newer {
-        return Err("The defaults file is from a newer version of the plugin. Update the plugin, or move the file.".into());
+        return Err(
+            "The defaults file is from a newer version of the plugin. Update the plugin, or move the file.".into(),
+        );
     }
     let mut raw = cur.raw;
     if let Status::Damaged(_) = cur.status {
@@ -563,9 +598,15 @@ pub fn save_part_at(dir: &Path, part: &str, value: Value) -> Result<(), String> 
     let _g = WRITE.lock().unwrap_or_else(|e| e.into_inner());
     let cur = load_at(dir);
     if cur.status == Status::Newer {
-        return Err("The defaults file is from a newer version of the plugin. Update the plugin, or move the file.".into());
+        return Err(
+            "The defaults file is from a newer version of the plugin. Update the plugin, or move the file.".into(),
+        );
     }
-    let mut raw = if matches!(cur.status, Status::Damaged(_)) { Map::new() } else { cur.raw };
+    let mut raw = if matches!(cur.status, Status::Damaged(_)) {
+        Map::new()
+    } else {
+        cur.raw
+    };
     raw.insert("v".into(), json!(VERSION));
     raw.insert(part.into(), value);
     write_json(&dir.join("defaults.json"), &Value::Object(raw)).map_err(|e| save_error(&e))
@@ -588,7 +629,13 @@ fn key_of(stem: &str) -> String {
 pub fn general_midi() -> Checked {
     let mut c = Checked::default();
     let mut put = |r: &str, n: &[u8]| {
-        c.roles.insert(r.into(), RoleEntry { notes: n.to_vec(), params: Map::new() });
+        c.roles.insert(
+            r.into(),
+            RoleEntry {
+                notes: n.to_vec(),
+                params: Map::new(),
+            },
+        );
     };
     put("kick", &[36]);
     put("snare", &[38]);
@@ -674,7 +721,11 @@ fn read_preset(path: &Path) -> Option<Preset> {
                     json!({"event": "preset_invalid", "folder": FOLDER_WORD, "why": "bad fields", "count": l.bad.len()}),
                 );
             }
-            Some(Preset { name, builtin: false, checked: l.checked })
+            Some(Preset {
+                name,
+                builtin: false,
+                checked: l.checked,
+            })
         }
         _ => {
             once_row(
@@ -689,7 +740,9 @@ fn read_preset(path: &Path) -> Option<Preset> {
 /// A preset by name (the built-in one or a file).
 #[must_use]
 pub fn get_at(dir: &Path, name: &str) -> Option<Preset> {
-    list_at(dir).into_iter().find(|p| key_of(&p.name) == key_of(name.trim()))
+    list_at(dir)
+        .into_iter()
+        .find(|p| key_of(&p.name) == key_of(name.trim()))
 }
 
 /// Write a preset.
@@ -742,7 +795,9 @@ pub fn delete_preset_at(dir: &Path, name: &str) -> Result<(), String> {
     };
     let path = presets_dir(dir).join(format!("{stem}.json"));
     match std::fs::symlink_metadata(&path) {
-        Ok(m) if m.is_file() => std::fs::remove_file(&path).map_err(|e| format!("The preset could not be deleted: {e}")),
+        Ok(m) if m.is_file() => {
+            std::fs::remove_file(&path).map_err(|e| format!("The preset could not be deleted: {e}"))
+        }
         _ => Err("No such preset.".into()),
     }
 }
@@ -752,7 +807,11 @@ mod tests {
     use super::*;
 
     fn scratch(tag: &str) -> PathBuf {
-        let d = std::env::temp_dir().join(format!("drumspike-ara-ud-{tag}-{}-{}", std::process::id(), crate::service::new_doc_id()));
+        let d = std::env::temp_dir().join(format!(
+            "drumspike-ara-ud-{tag}-{}-{}",
+            std::process::id(),
+            crate::service::new_doc_id()
+        ));
         std::fs::create_dir_all(&d).unwrap();
         d
     }
@@ -815,7 +874,10 @@ mod tests {
         let l = load_at(&d);
         assert_eq!(l.status, Status::Ok);
         assert!(l.checked.roles["kick"].notes.is_empty(), "the note 300 is dropped");
-        assert_eq!(l.checked.roles["kick"].params["min_gap_ms"], 20, "the good field of the same role stays");
+        assert_eq!(
+            l.checked.roles["kick"].params["min_gap_ms"], 20,
+            "the good field of the same role stays"
+        );
         for r in ["snare", "tom", "hat", "cymbal", "other", "bogus"] {
             assert!(!l.checked.roles.contains_key(r), "{r}");
         }
@@ -826,12 +888,24 @@ mod tests {
     #[test]
     fn the_ranges_of_the_velocity_setting_and_the_thresholds() {
         let mut bad = Vec::new();
-        let p = params_of(&json!({"vel_lo_db": -10, "vel_hi_db": -20, "vel_cut_db": -5, "thresholds": [0.2,0.2,0.2,0.2,0.9]}), "p", &mut bad);
+        let p = params_of(
+            &json!({"vel_lo_db": -10, "vel_hi_db": -20, "vel_cut_db": -5, "thresholds": [0.2,0.2,0.2,0.2,0.9]}),
+            "p",
+            &mut bad,
+        );
         assert!(p.is_empty(), "{p:?}");
-        let p = params_of(&json!({"vel_lo_db": -50, "vel_hi_db": -10, "vel_cut_db": -60, "shift_samples": 4, "min_gap_ms": f64::MAX}), "p", &mut bad);
+        let p = params_of(
+            &json!({"vel_lo_db": -50, "vel_hi_db": -10, "vel_cut_db": -60, "shift_samples": 4, "min_gap_ms": f64::MAX}),
+            "p",
+            &mut bad,
+        );
         assert_eq!(p.len(), 3, "the shift is no default and the gap is out of range: {p:?}");
         let mut bad = Vec::new();
-        let p = params_of(&json!({"vel_lo_db": -50, "vel_hi_db": -10, "vel_cut_db": -5}), "p", &mut bad);
+        let p = params_of(
+            &json!({"vel_lo_db": -50, "vel_hi_db": -10, "vel_cut_db": -5}),
+            "p",
+            &mut bad,
+        );
         assert!(!p.contains_key("vel_cut_db"), "a cut above the ceiling is dropped");
     }
 
@@ -842,7 +916,10 @@ mod tests {
         std::fs::write(&target, r#"{"v":1,"roles":{"kick":{"note":40}}}"#).unwrap();
         std::os::unix::fs::symlink(&target, d.join("defaults.json")).unwrap();
         let l = load_at(&d);
-        assert!(matches!(l.status, Status::Damaged(_)) && l.checked.roles.is_empty(), "a link is not followed");
+        assert!(
+            matches!(l.status, Status::Damaged(_)) && l.checked.roles.is_empty(),
+            "a link is not followed"
+        );
         std::fs::remove_file(d.join("defaults.json")).unwrap();
         std::fs::create_dir(d.join("defaults.json")).unwrap();
         assert!(matches!(load_at(&d).status, Status::Damaged(_)), "a folder");
@@ -864,22 +941,48 @@ mod tests {
         let l = load_at(&d);
         assert_eq!(l.status, Status::Newer);
         assert_eq!(l.checked.roles["kick"].notes, [40]);
-        let e = save_role_at(&d, "snare", Some(&RoleEntry { notes: vec![38], params: Map::new() })).unwrap_err();
+        let e = save_role_at(
+            &d,
+            "snare",
+            Some(&RoleEntry {
+                notes: vec![38],
+                params: Map::new(),
+            }),
+        )
+        .unwrap_err();
         assert!(e.contains("newer version"), "{e}");
-        assert_eq!(std::fs::read_to_string(d.join("defaults.json")).unwrap(), text, "the file is as it was");
+        assert_eq!(
+            std::fs::read_to_string(d.join("defaults.json")).unwrap(),
+            text,
+            "the file is as it was"
+        );
     }
 
     #[test]
     fn a_save_changes_one_role_and_keeps_every_unknown_field() {
         let d = scratch("save");
-        write(&d, r#"{"v":1,"future":{"a":1},"roles":{"kick":{"notes":[36],"extra":true},"hat":{"notes":[42]},"alien":{"x":1}}}"#);
+        write(
+            &d,
+            r#"{"v":1,"future":{"a":1},"roles":{"kick":{"notes":[36],"extra":true},"hat":{"notes":[42]},"alien":{"x":1}}}"#,
+        );
         let mut params = Map::new();
         params.insert("min_gap_ms".into(), json!(25));
-        save_role_at(&d, "kick", Some(&RoleEntry { notes: vec![35], params })).unwrap();
+        save_role_at(
+            &d,
+            "kick",
+            Some(&RoleEntry {
+                notes: vec![35],
+                params,
+            }),
+        )
+        .unwrap();
         let v: Value = serde_json::from_str(&std::fs::read_to_string(d.join("defaults.json")).unwrap()).unwrap();
         assert_eq!(v["future"]["a"], 1);
         assert_eq!(v["roles"]["kick"]["notes"], json!([35]));
-        assert_eq!(v["roles"]["kick"]["extra"], true, "a field of the role that we do not know stays");
+        assert_eq!(
+            v["roles"]["kick"]["extra"], true,
+            "a field of the role that we do not know stays"
+        );
         assert_eq!(v["roles"]["hat"]["notes"], json!([42]), "another role is not touched");
         assert_eq!(v["roles"]["alien"]["x"], 1);
         save_role_at(&d, "kick", None).unwrap();
@@ -891,8 +994,19 @@ mod tests {
     fn a_damaged_file_is_copied_once_before_it_is_replaced() {
         let d = scratch("bad");
         write(&d, "my own text");
-        save_role_at(&d, "snare", Some(&RoleEntry { notes: vec![38], params: Map::new() })).unwrap();
-        assert_eq!(std::fs::read_to_string(d.join("defaults.bad.json")).unwrap(), "my own text");
+        save_role_at(
+            &d,
+            "snare",
+            Some(&RoleEntry {
+                notes: vec![38],
+                params: Map::new(),
+            }),
+        )
+        .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(d.join("defaults.bad.json")).unwrap(),
+            "my own text"
+        );
         assert_eq!(load_at(&d).checked.roles["snare"].notes, [38]);
     }
 
@@ -901,7 +1015,14 @@ mod tests {
         let d = scratch("ro");
         use std::os::unix::fs::PermissionsExt;
         std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o500)).unwrap();
-        let r = save_role_at(&d, "snare", Some(&RoleEntry { notes: vec![38], params: Map::new() }));
+        let r = save_role_at(
+            &d,
+            "snare",
+            Some(&RoleEntry {
+                notes: vec![38],
+                params: Map::new(),
+            }),
+        );
         let writable = std::fs::write(d.join("probe"), b"x").is_ok(); // root ignores the mode
         std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o700)).unwrap();
         if !writable {
@@ -947,7 +1068,11 @@ mod tests {
         assert!(delete_preset_at(&d, BUILTIN).is_err());
         // a file that shadows it is not listed
         std::fs::create_dir_all(d.join("Presets")).unwrap();
-        std::fs::write(d.join("Presets/gm.json"), r#"{"v":1,"name":"General MIDI","roles":{"kick":{"note":1}}}"#).unwrap();
+        std::fs::write(
+            d.join("Presets/gm.json"),
+            r#"{"v":1,"name":"General MIDI","roles":{"kick":{"note":1}}}"#,
+        )
+        .unwrap();
         assert_eq!(list_at(&d).len(), 1);
     }
 
@@ -955,10 +1080,19 @@ mod tests {
     fn presets_are_saved_listed_loaded_and_deleted_by_a_safe_name() {
         let d = scratch("pre");
         let mut roles = BTreeMap::new();
-        roles.insert("kick".to_string(), RoleEntry { notes: vec![35], params: Map::new() });
+        roles.insert(
+            "kick".to_string(),
+            RoleEntry {
+                notes: vec![35],
+                params: Map::new(),
+            },
+        );
         assert!(save_preset_at(&d, "  ", &roles).is_err());
         save_preset_at(&d, "My Kit/../x", &roles).unwrap();
-        let files: Vec<_> = std::fs::read_dir(d.join("Presets")).unwrap().filter_map(Result::ok).collect();
+        let files: Vec<_> = std::fs::read_dir(d.join("Presets"))
+            .unwrap()
+            .filter_map(Result::ok)
+            .collect();
         assert_eq!(files.len(), 1);
         assert!(!files[0].file_name().to_string_lossy().contains('/'));
         let list = list_at(&d);
@@ -975,7 +1109,11 @@ mod tests {
         let d = scratch("prehostile");
         let p = d.join("Presets");
         std::fs::create_dir_all(&p).unwrap();
-        std::fs::write(p.join("good.json"), r#"{"v":1,"name":"Good","roles":{"snare":{"note":38}}}"#).unwrap();
+        std::fs::write(
+            p.join("good.json"),
+            r#"{"v":1,"name":"Good","roles":{"snare":{"note":38}}}"#,
+        )
+        .unwrap();
         std::fs::write(p.join("junk.json"), "{{").unwrap();
         std::fs::write(p.join("big.json"), "x".repeat(70_000)).unwrap();
         std::fs::write(p.join("noname.json"), r#"{"v":1,"roles":{}}"#).unwrap();
@@ -992,7 +1130,11 @@ mod tests {
         let p = d.join("Presets");
         std::fs::create_dir_all(&p).unwrap();
         for i in 0..230 {
-            std::fs::write(p.join(format!("p{i:03}.json")), format!(r#"{{"v":1,"name":"P{i:03}","roles":{{}}}}"#)).unwrap();
+            std::fs::write(
+                p.join(format!("p{i:03}.json")),
+                format!(r#"{{"v":1,"name":"P{i:03}","roles":{{}}}}"#),
+            )
+            .unwrap();
         }
         assert_eq!(list_at(&d).len(), 1 + MAX_PRESETS);
         let e = save_preset_at(&d, "one more", &BTreeMap::new()).unwrap_err();
@@ -1008,6 +1150,33 @@ mod tests {
                 assert_ne!(&d, r, "a test build must not point at the real folder");
             }
         }
+    }
+
+    /// One process of the stage `defaults-writers` (and the control of `defaults-standalone-control`): saves roles in the folder of
+    /// `DS_ARA_USER_DIR` in a loop while a reader checks that every read parses. Ignored in a normal run.
+    #[test]
+    #[ignore]
+    fn race_worker() {
+        let d = PathBuf::from(std::env::var("DS_ARA_USER_DIR").expect("DS_ARA_USER_DIR"));
+        let id = std::process::id() as usize;
+        let mut half = 0;
+        for k in 0..150 {
+            let role = ROLES[(id + k) % 5];
+            let _ = save_role_at(
+                &d,
+                role,
+                Some(&RoleEntry {
+                    notes: vec![(30 + id % 90) as u8],
+                    params: Map::new(),
+                }),
+            );
+            if let Ok(b) = std::fs::read(d.join("defaults.json")) {
+                if serde_json::from_slice::<Value>(&b).is_err() {
+                    half += 1;
+                }
+            }
+        }
+        assert_eq!(half, 0, "a read saw a half file");
     }
 
     #[test]
@@ -1031,7 +1200,14 @@ mod tests {
                     s.spawn(move || {
                         for k in 0..30 {
                             let role = ROLES[(i + k) % 5];
-                            let _ = save_role_at(&d, role, Some(&RoleEntry { notes: vec![(30 + i) as u8], params: Map::new() }));
+                            let _ = save_role_at(
+                                &d,
+                                role,
+                                Some(&RoleEntry {
+                                    notes: vec![(30 + i) as u8],
+                                    params: Map::new(),
+                                }),
+                            );
                         }
                     })
                 })
@@ -1041,7 +1217,11 @@ mod tests {
             }
             stop.store(true, std::sync::atomic::Ordering::SeqCst);
         });
-        assert_eq!(bad.load(std::sync::atomic::Ordering::SeqCst), 0, "a reader saw a half file");
+        assert_eq!(
+            bad.load(std::sync::atomic::Ordering::SeqCst),
+            0,
+            "a reader saw a half file"
+        );
         assert_eq!(load_at(&d).status, Status::Ok);
     }
 }

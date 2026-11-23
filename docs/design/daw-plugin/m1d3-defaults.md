@@ -134,7 +134,7 @@ How a gate run is kept away from the real file:
 - New stage `defaults-real-path`: a run WITHOUT the switch and with `HOME` below `out/`; it needs the row `defaults_path_refused`
   and 0 files and 0 folders named `DrumSpike ARA` below that `HOME`. Fault run `DS_ARA_DEFAULTS_FAULT=real-path` turns the guard off
   (the path resolves below `HOME`, which is below `out/` in this run, so the real home is never touched): the stage must FAIL because
-  the folder appears. Register `DS_ARA_USER_DIR` (kind scenario) and `DS_ARA_DEFAULTS_FAULT` (kind fault) in `switches.json`, so the
+  the refusal row is missing (a read makes no folder, so the folder cannot be the sign). Register `DS_ARA_USER_DIR` (kind scenario) and `DS_ARA_DEFAULTS_FAULT` (kind fault) in `switches.json`, so the
   start guard of `check.sh` fails when one of them is set in the caller's environment (an owner shell never carries them into a gate).
 - The cargo unit tests build the path by an argument (`Defaults::at(dir)`), never from `HOME`. A unit test fails when
   `dir()` of a test build answers a path that starts with the real `HOME` (it reads `HOME` and compares).
@@ -383,3 +383,14 @@ undo list is unchanged. R7 no "Apply default to this track". R8 symlink, directo
 field is range-checked like the file. R10 the standalone proof uses a temp `HOME`. R11 `HM_EXTRA` second kind, `hostMenuAudit` still passes, the two
 entries exist in host mode only. R12 see section 4. Report rows carry the fixed word `defaults-folder`, never an absolute path; the rows are
 listed in the privacy class list of the README.
+
+## 15. What was built (state at the end of the work)
+
+Built and proved: the file module `plugins/ara/src/userdefaults.rs` (unit tests, hostile matrix, race test), the start values of new tracks (`make_new_track` is
+`apply_defaults` in `service.rs`; one snapshot per round; the order of the DAW tracks by `SourceSnapshot.order`), the fix of Q4 (`#577 fix:` commit), the archive
+field `export` (unit tests, stage `doc-archive-export`), the shell commands of `editor.rs`, the page (`static/hostdefaults.js`, tests in
+`tests/e2e_app/test_host_defaults.py`), Gate line 6 (`tests/test_standalone_plugin_files.py`, stage `defaults-standalone-control`).
+Not built: a stage `editor-defaults` that drives the REAL page in the plugin's web view (the page is proved in Chromium against the bridge with the plugin
+commands stubbed; the plugin side of the commands is proved by unit tests and the stages above). The page has no control for the `follow` and `export` parts
+of the file; they are read from a file that the user may edit by hand. The store half of the archive field (`record_page_edit`) has a unit test of the
+state and a restore stage, but no stage that sets an export setting in a page and stores the archive.

@@ -282,7 +282,10 @@ mod tests {
         assert_eq!(st.export["midi_mode"], "single");
         let back = decode(&encode(&st)).unwrap();
         assert_eq!(back, st);
-        assert!(!String::from_utf8(encode(&st)).unwrap().contains("later"), "a field we do not know is not written back (the rule of the archive)");
+        assert!(
+            !String::from_utf8(encode(&st)).unwrap().contains("later"),
+            "a field we do not know is not written back (the rule of the archive)"
+        );
         // an archive without the field restores as today and writes none
         let old = decode(br#"{"version":1,"archive_id":"x","events":{},"sources":[]}"#).unwrap();
         assert!(old.export.is_empty());

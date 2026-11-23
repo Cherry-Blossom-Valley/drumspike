@@ -331,7 +331,9 @@ impl SourceState {
     /// take their start values in this order.
     fn order(&self) -> i32 {
         let seqs = self.doc.sequences.lock().unwrap_or_else(|e| e.into_inner()).clone();
-        let Ok(regions) = self.regions.lock() else { return i32::MAX };
+        let Ok(regions) = self.regions.lock() else {
+            return i32::MAX;
+        };
         regions
             .iter()
             .min_by(|a, b| a.rec.start_play.total_cmp(&b.rec.start_play).then(a.id.cmp(&b.id)))
@@ -2882,10 +2884,12 @@ impl Session {
             svc.keep_settings(kept);
             let result = svc.restore(&tracks)?;
             let export = worker_doc.export.lock().unwrap_or_else(|e| e.into_inner()).clone();
-            if !export.is_empty() {
+            if !export.is_empty() && crate::test_switch("DS_ARA_DEFAULTS_FAULT").as_deref() != Ok("export-drop") {
                 let refused = svc.restore_export(&export);
                 if !refused.is_empty() {
-                    session().log(json!({"event": "restore_refused", "what": "export settings", "fields": refused}).to_string());
+                    session().log(
+                        json!({"event": "restore_refused", "what": "export settings", "fields": refused}).to_string(),
+                    );
                 }
             }
             Ok((result, svc.id().to_string(), svc.folder(), svc.home()))

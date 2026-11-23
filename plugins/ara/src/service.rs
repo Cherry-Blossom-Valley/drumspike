@@ -1036,10 +1036,7 @@ impl DocService {
             if !fresh[i] {
                 continue;
             }
-            let role = match rows[i]["track"]["role"].as_str() {
-                Some(r) if switch("DS_ARA_DEFAULTS_FAULT").as_deref() != Some("no-role") || r != "other" => r.to_string(),
-                _ => "snare".to_string(),
-            };
+            let role = rows[i]["track"]["role"].as_str().unwrap_or("other").to_string();
             let mut record = rows[i]["track"].clone();
             apply_defaults(&mut record, &role, &defaults, &mut used);
             rows[i]["track"] = record;
@@ -1576,23 +1573,29 @@ fn audio_role(wav: &Path) -> (Option<&'static str>, usize) {
 /// #577: the start values of a NEW track of `role` from the user defaults: the first note of the role's list that no other track of the
 /// role uses (`used` grows), and the detection settings. A role with no entry keeps the built-in note. A record that is not an object
 /// is left alone.
-fn apply_defaults(record: &mut Value, role: &str, defaults: &crate::userdefaults::Loaded, used: &mut HashMap<String, Vec<i64>>) {
+fn apply_defaults(
+    record: &mut Value,
+    role: &str,
+    defaults: &crate::userdefaults::Loaded,
+    used: &mut HashMap<String, Vec<i64>>,
+) {
     let Some(obj) = record.as_object_mut() else { return };
     let list = used.entry(role.to_string()).or_default();
-    match defaults.checked.roles.get(role) {
-        Some(entry) => {
-            if let Some(n) = crate::userdefaults::pick_note(&entry.notes, list) {
-                obj.insert("note".into(), Value::from(i64::from(n)));
-            }
-            if !entry.params.is_empty() {
-                let mut p = obj.get("params").and_then(Value::as_object).cloned().unwrap_or_default();
-                for (k, v) in &entry.params {
-                    p.insert(k.clone(), v.clone());
-                }
-                obj.insert("params".into(), Value::Object(p));
-            }
+    if let Some(entry) = defaults.checked.roles.get(role) {
+        if let Some(n) = crate::userdefaults::pick_note(&entry.notes, list) {
+            obj.insert("note".into(), Value::from(i64::from(n)));
         }
-        None => {}
+        if !entry.params.is_empty() {
+            let mut p = obj
+                .get("params")
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_default();
+            for (k, v) in &entry.params {
+                p.insert(k.clone(), v.clone());
+            }
+            obj.insert("params".into(), Value::Object(p));
+        }
     }
     if let Some(n) = obj.get("note").and_then(Value::as_i64) {
         list.push(n);
@@ -2126,7 +2129,9 @@ mod tests {
 
     #[test]
     fn new_toms_take_the_notes_of_the_list_in_turn_and_the_last_when_the_list_is_used() {
-        let d = defaults_with(r#"{"v":1,"roles":{"tom":{"notes":[50,48,47],"params":{"min_gap_ms":33}},"snare":{"note":40}}}"#);
+        let d = defaults_with(
+            r#"{"v":1,"roles":{"tom":{"notes":[50,48,47],"params":{"min_gap_ms":33}},"snare":{"note":40}}}"#,
+        );
         let mut used: HashMap<String, Vec<i64>> = HashMap::new();
         used.entry("tom".into()).or_default().push(50); // a tom of the document uses 50
         let mut got = Vec::new();
@@ -2150,7 +2155,10 @@ mod tests {
     #[test]
     fn a_role_that_the_daw_name_changes_keeps_a_note_the_user_set() {
         // the note equals the built-in note of the old role: it follows the new role
-        let snare = SourceSnapshot { label: Some("Snare".into()), ..labelled(Some("Snare")) };
+        let snare = SourceSnapshot {
+            label: Some("Snare".into()),
+            ..labelled(Some("Snare"))
+        };
         let mut rec = json!({"role": "other", "note": 36});
         assert!(apply_label_role(rec.as_object_mut().unwrap(), &snare));
         assert_eq!(rec["note"], 38);
@@ -2185,7 +2193,10 @@ mod tests {
         let refused = doc2.restore_export(&bad);
         assert!(refused.contains(&"formats".to_string()), "{refused:?}");
         let sid2 = doc2.sid.clone().unwrap();
-        assert!(doc2.service().unwrap().export_last_get(&sid2).unwrap()["export_last"].is_null(), "nothing was set");
+        assert!(
+            doc2.service().unwrap().export_last_get(&sid2).unwrap()["export_last"].is_null(),
+            "nothing was set"
+        );
         let mut half = Map::new();
         half.insert("formats".into(), json!(["audio"]));
         half.insert("midi_mode".into(), json!("evil"));
@@ -2194,7 +2205,10 @@ mod tests {
         assert_eq!(refused, ["midi_mode"]);
         let last = doc2.service().unwrap().export_last_get(&sid2).unwrap();
         assert_eq!(last["export_last"]["formats"], json!(["audio"]));
-        assert!(last["export_last"]["dest"].is_null(), "a dest of an archive is never taken");
+        assert!(
+            last["export_last"]["dest"].is_null(),
+            "a dest of an archive is never taken"
+        );
     }
 
     fn scratch(tag: &str) -> PathBuf {
