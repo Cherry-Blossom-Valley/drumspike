@@ -1903,7 +1903,7 @@ mod tests {
         prep.lock()
             .failed
             .insert(key.clone(), (1, "x".into(), Instant::now(), 1));
-        let _ = prep.take(&[key.clone()]);
+        let _ = prep.take(std::slice::from_ref(&key));
         assert!(prep.lock().failed.is_empty(), "a take");
         let _ = std::fs::remove_dir_all(&root);
     }
