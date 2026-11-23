@@ -783,6 +783,7 @@ function rulerDown(ev) {   // the time ruler and the Bars|Beats ruler (P4-8): a 
   sessionInit({ GLQ, lnReset, auReset, tmLoad, selMem: () => selMem, setSelMem: v => { selMem = v; }, exTempoReset: () => { EX.tempoAck = false; } });   // R17 step 6: session.js resets the module state of the owners a load replaces (the GL tile queue, LN/AU/TM, the selection memory) through the injected hooks; #151: the default-tempo answer is per project
   hostMenuInit();   // #559: the menu button of the host mode (returns at once with the mode off)
   hostSelInit();   // #562: the follow of the DAW selection (returns at once with the mode off)
+  DLV.init();   // #576: the drag handles of the DAW (returns at once with the mode off)
   HT.init();   // #555: the rows of the DAW tracks in song time (returns at once with the mode off)
   hostApply();   // #539: the page of the host mode (a class on <body>, the controls of the list hidden) before the first layout
   tmInit(); measureGeo(); geoObserve();   // P4-8: the map rulers; P3-14d: the geometry once now, then from the ResizeObserver

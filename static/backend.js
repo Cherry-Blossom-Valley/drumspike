@@ -331,6 +331,11 @@ function shellMethods(invoke, T) {
     hostTempo: () => (bridge() ? Promise.resolve({ source: "none", bpm: 120, steps: 0, reason: "", stretched: [] }) : invoke("plugin_host_tempo", {})),
     /* #555: the rows of the page in song time: {gen, rows: [{id, name, srcs, clips: [{src, a, b, s, k}]}], song_end, gone}. The test bridge has no host: none. */
     hostRegions: () => (bridge() ? Promise.resolve(null) : invoke("plugin_host_regions", {})),
+    /* #576: the handles of the DAW: the state of the prepared files, the files of a drag (every item must be ready for the current hits), the first use of a wav kind.
+       The test bridge has no host: none. */
+    deliverState: () => (bridge() ? Promise.resolve(null) : invoke("plugin_deliver_state", {})),
+    deliverTake: items => invoke("plugin_deliver_take", { items }),
+    deliverWant: kind => invoke("plugin_deliver_want", { kind }),
     exportDragTake: (sid, paths) => invoke("export_drag_take", { sid, paths }),   // #433: a drag starts: the files move into Exports/ under their export names; {files}
     /* the native file drag out of the window (tauri-plugin-drag): the files must exist. The test bridge has no native drag: it records
        the paths in window.__DS_DRAG__ */
