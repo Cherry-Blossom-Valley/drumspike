@@ -53,6 +53,7 @@ pub mod service;
 pub mod state;
 pub mod tempo_ara;
 pub mod transport;
+pub mod userdefaults;
 pub mod wav;
 
 use ara::*;
@@ -289,6 +290,7 @@ impl SourceState {
         };
         service::SourceSnapshot {
             seq: self.seq,
+            order: self.order(),
             // `DS_ARA_NAMES_FAULT=key` (the check's fault run): the track key follows the name of
             // the DAW track, which the identity of a track must never do
             name: if crate::test_switch("DS_ARA_NAMES_FAULT").as_deref() == Ok("key") {
@@ -323,6 +325,18 @@ impl SourceState {
         }
         let seqs = self.doc.sequences.lock().unwrap_or_else(|e| e.into_inner()).clone();
         self.label_in(&seqs)
+    }
+
+    /// #577: the place of the DAW track of the first region (its `orderIndex`), `i32::MAX` when the host gave none: new tracks of one round
+    /// take their start values in this order.
+    fn order(&self) -> i32 {
+        let seqs = self.doc.sequences.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let Ok(regions) = self.regions.lock() else { return i32::MAX };
+        regions
+            .iter()
+            .min_by(|a, b| a.rec.start_play.total_cmp(&b.rec.start_play).then(a.id.cmp(&b.id)))
+            .and_then(|r| seqs.get(&r.sequence).and_then(|q| q.order))
+            .unwrap_or(i32::MAX)
     }
 
     /// [`SourceState::label`] with the region sequences already read (one copy for many sources).
@@ -448,6 +462,9 @@ struct DocShared {
     members: Mutex<Vec<std::sync::Weak<SourceState>>>,
     /// Sources whose notes changed in a later round: the host is told in `notifyModelUpdates`.
     pending: Mutex<Vec<Arc<SourceState>>>,
+    /// M1d3 (#577): the export settings of the document as the archive keeps them (`formats`, `midi_mode`, `compensate`); empty until the
+    /// page sets them or a restore brings them. Lock order: events, settings, export.
+    export: Mutex<serde_json::Map<String, Value>>,
     /// The editor's way to the service (it never takes the `svc` lock the worker holds).
     page: Arc<service::PageHandle>,
     /// The ARA playback controller of the host (M1b7), when the host gives one. Set in
@@ -605,6 +622,7 @@ impl DocShared {
         let doc = Arc::new(DocShared {
             cache,
             page: svc.page_handle(),
+            export: Mutex::new(serde_json::Map::new()),
             round_regions: Mutex::new(HashMap::new()),
             round_samples: Mutex::new(HashMap::new()),
             region_gen: AtomicU64::new(0),
@@ -765,6 +783,7 @@ impl DocShared {
         // would miss it): read at every edit, and set together with the events (below), so a store never sees a
         // new role with old hits
         let fresh_settings = self.read_settings(svc, sid);
+        let fresh_export = read_export(svc, sid);
         let mut all = serde_json::Map::new();
         for s in members.iter().filter(|s| !s.removed.load(Ordering::SeqCst)) {
             let Some(track) = s.track.lock().ok().and_then(|t| t.clone()) else {
@@ -814,6 +833,9 @@ impl DocShared {
         let mut cur = self.events.lock().unwrap_or_else(|e| e.into_inner());
         let mut st = self.settings.lock().unwrap_or_else(|e| e.into_inner());
         self.merge_settings_in(&mut st, fresh_settings);
+        if let Some(e) = fresh_export {
+            *self.export.lock().unwrap_or_else(|x| x.into_inner()) = e;
+        }
         if *cur == all {
             return Ok(false);
         }
@@ -2859,6 +2881,13 @@ impl Session {
             };
             svc.keep_settings(kept);
             let result = svc.restore(&tracks)?;
+            let export = worker_doc.export.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            if !export.is_empty() {
+                let refused = svc.restore_export(&export);
+                if !refused.is_empty() {
+                    session().log(json!({"event": "restore_refused", "what": "export settings", "fields": refused}).to_string());
+                }
+            }
             Ok((result, svc.id().to_string(), svc.folder(), svc.home()))
         });
         match outcome {
@@ -4546,6 +4575,24 @@ unsafe extern "C" fn dc_destroyPlaybackRegion(c: ARADocumentControllerRef, r: AR
     })
 }
 
+/// M1d3 (#577): the export settings that the archive keeps, read from the service: `formats`, `midi_mode`, `compensate` of `export_last`
+/// (`None` before the first export or when the service cannot answer: the archive then keeps what it had). Never `scope`, `track` or
+/// `dest`. (Fault `export-drop`: nothing is kept.)
+fn read_export(svc: &drumspike_app::Service, sid: &str) -> Option<serde_json::Map<String, Value>> {
+    if crate::test_switch("DS_ARA_DEFAULTS_FAULT").as_deref() == Ok("export-drop") {
+        return None;
+    }
+    let got = svc.export_last_get(sid).ok()?;
+    let last = got["export_last"].as_object()?;
+    let mut out = serde_json::Map::new();
+    for k in ["formats", "midi_mode", "compensate"] {
+        if let Some(v) = last.get(k) {
+            out.insert(k.into(), v.clone());
+        }
+    }
+    Some(out)
+}
+
 // ---------------------------------------------------------------- archiving
 
 /// The document archive ID of this plugin's factory.
@@ -4640,6 +4687,7 @@ unsafe extern "C" fn dc_storeObjectsToArchive(
             doc_id: ctl.doc.id(),
             events,
             sources,
+            export: ctl.doc.export.lock().unwrap_or_else(|e| e.into_inner()).clone(),
         });
         if ctl.host.is_null() {
             return 0;
@@ -4713,6 +4761,7 @@ unsafe extern "C" fn dc_restoreObjectsFromArchive(
                 id = Some(st.doc_id.clone());
             }
         }
+        *ctl.doc.export.lock().unwrap_or_else(|e| e.into_inner()) = st.export.clone();
         // the events of the archive that name a track the plugin can keep (a name that is
         // no path); the others are dropped and the report says how many
         let events_ok: Vec<(&String, &Value)> = st
