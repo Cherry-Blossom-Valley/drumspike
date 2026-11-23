@@ -40,7 +40,7 @@ DLV.text = function (s) {
   return w.length > 40 ? w.slice(0, 37) + "…" : w;
 };
 DLV.title = function (label, s, extra) {   // no word "file" or "folder" in what the user reads (the host page test of the visible words)
-  const why = s.state === "error" ? `error: ${s.why}` : s.state === "none" ? "no hits" : s.state === "off" ? "press to prepare (a press starts it)" : s.state === "preparing" ? "preparing: made in the background" : `ready (${s.n}). Drag it into your DAW`;
+  const why = s.state === "error" ? `error: ${s.why}. Press to try again` : s.state === "none" ? "no hits" : s.state === "off" ? "press to prepare (a press starts it)" : s.state === "preparing" ? "preparing: made in the background" : `ready (${s.n}). Drag it into your DAW with the mouse. Keyboard: use Export… (Cmd+E)`;
   return `${label}: ${why}. ${DLV_HINT}.${extra ? " " + extra : ""}`;
 };
 
@@ -53,31 +53,54 @@ DLV.rowFor = function (name) {
   return DLV.st.rows.find(r => r.srcs[0] === name) || null;
 };
 
-/* One handle element. `get()` gives its state; `items()` the files of a drag; `kind` is the first-use kind for a press on "press to prepare". */
-DLV.handle = function (label, kind, get, items, extra) {
+/* A press on an element that is a drag source: a press and a move of 4 px on a READY element starts the drag (the plugin checks the hits and gives the
+   items); a press with no move on an element that says "press to prepare" or "error" runs `act` (the first use of a spike kind, or a new try).
+   The listeners on the document live from the press to the mouse up (or the loss of the window focus) and nowhere else. */
+DLV.arm = function (el, get, items, act) {
+  el.addEventListener("mousedown", ev => {
+    if (ev.button !== 0) return;
+    ev.preventDefault(); ev.stopPropagation();
+    const s = get(), x0 = ev.clientX, y0 = ev.clientY;
+    const off = () => { document.removeEventListener("mousemove", mv, true); document.removeEventListener("mouseup", up, true); window.removeEventListener("blur", off); };
+    const mv = e => { if (Math.hypot(e.clientX - x0, e.clientY - y0) > 4) { off(); if (s.state === "ready") { DLV.closeMenu(); DLV.drag(items()); } } };
+    const up = () => { off(); if (s.state === "off" || s.state === "error") { DLV.closeMenu(); act(); } };
+    document.addEventListener("mousemove", mv, true); document.addEventListener("mouseup", up, true); window.addEventListener("blur", off);
+  });
+};
+/* Keyboard: Enter or Space on an element runs the press (prepare, try again); a drag is mouse only. */
+DLV.keys = function (el, get, act) {
+  el.addEventListener("keydown", ev => {
+    if (ev.key !== "Enter" && ev.key !== " ") return;
+    ev.preventDefault(); ev.stopPropagation();
+    const s = get();
+    if (s.state === "off" || s.state === "error") act();
+    else if (s.state === "ready") setMsg("A drag needs the mouse. Keyboard: use Export… (Cmd+E) in the menu");
+  });
+};
+/* `wants`: [{kind, row?}] that a press starts: the first use of the spike kinds, or a new try of what failed. */
+DLV.act = wants => () => { wants.forEach(w => DLV.want(w.kind, w.row)); };
+
+/* One handle element. `get()` gives its state; `items()` the items of a drag; `wants` what a press starts. */
+DLV.handle = function (label, kind, get, items, extra, wants) {
   const h = document.createElement("div");
   h.className = "dlvH"; h.dataset.kind = kind; h.draggable = false;
+  h.setAttribute("role", "button"); h.tabIndex = 0;
   const lb = document.createElement("span"); lb.className = "dlvL"; lb.textContent = label;
   const tx = document.createElement("span"); tx.className = "dlvT";
   h.append(lb, tx);
   h._paint = () => {
     const s = get();
     h.dataset.state = s.state; tx.textContent = DLV.text(s); h.title = DLV.title(label, s, extra);
+    h.setAttribute("aria-label", `${label}, ${s.state === "error" ? "error, press to retry" : DLV.text(s)}`);
   };
-  h.addEventListener("mousedown", ev => {
-    if (ev.button !== 0) return;
-    ev.preventDefault(); ev.stopPropagation();
-    const s = get(), x0 = ev.clientX, y0 = ev.clientY;
-    const off = () => { document.removeEventListener("mousemove", mv, true); document.removeEventListener("mouseup", up, true); };
-    const mv = e => { if (Math.hypot(e.clientX - x0, e.clientY - y0) > 4) { off(); if (s.state === "ready") DLV.drag(items()); } };
-    const up = () => { off(); if (s.state === "off") DLV.want(kind === "all" ? "spike" : kind); };
-    document.addEventListener("mousemove", mv, true); document.addEventListener("mouseup", up, true);
-  });
+  const act = DLV.act(wants || [{ kind }]);
+  DLV.arm(h, get, items, act);
+  DLV.keys(h, get, act);
   return h;
 };
 
-DLV.want = async function (kind) {
-  try { DLV.take(await B.deliverWant(kind)); } catch (e) { setMsg(`could not start the preparation: ${errText(e)}`, "error"); }
+DLV.want = async function (kind, row) {
+  try { DLV.take(await B.deliverWant(kind, row)); } catch (e) { setMsg(`could not start the preparation: ${errText(e)}`, "error"); }
 };
 
 /* The drag: the plugin checks that every item is ready for the CURRENT hits; a refused take is not an error of the user (the state says
@@ -89,6 +112,39 @@ DLV.drag = async function (items) {
   catch (e) { setMsg(`drag refused: ${errText(e)}`, "error"); DLV.pull(); return; }
   B.dragFiles(files).then(() => setMsg(`dragged ${files.length} item${files.length === 1 ? "" : "s"}: ${DLV_HINT.toLowerCase()}`))
     .catch(e => setMsg(`drag failed: ${errText(e)}`, "error"));
+};
+
+/* A small menu of handles (the collapsed header, the narrow toolbar). An entry is a drag source itself: a press and a move on a ready entry starts the
+   drag, a press on "press to prepare" or "error" starts the work. Its listeners on the document are removed when the menu closes. */
+DLV.closeMenu = function () {
+  const m = document.getElementById("dlvMenu");
+  if (DLV.menuOff) { DLV.menuOff(); DLV.menuOff = null; }
+  if (m) m.remove();
+};
+DLV.menu = function (anchor, entries) {
+  DLV.closeMenu();
+  const m = document.createElement("div"); m.id = "dlvMenu"; m.className = "dlvMenu"; m.setAttribute("role", "menu");
+  for (const en of entries) {
+    const it = document.createElement("div"); it.className = "dlvItem"; it.setAttribute("role", "menuitem"); it.tabIndex = 0;
+    const s = en.get();
+    it.dataset.state = s.state; it.dataset.kind = en.kind;
+    it.textContent = `${en.label}: ${DLV.text(s)}`;
+    it.setAttribute("aria-label", `${en.label}, ${s.state === "error" ? "error, press to retry" : DLV.text(s)}`);
+    it.title = DLV.title(en.label, s, "");
+    const act = DLV.act(en.wants);
+    DLV.arm(it, en.get, en.items, act);
+    DLV.keys(it, en.get, () => { DLV.closeMenu(); act(); });
+    m.appendChild(it);
+  }
+  document.body.appendChild(m);
+  const b = anchor.getBoundingClientRect();
+  m.style.left = Math.max(0, Math.min(b.left, innerWidth - m.offsetWidth)) + "px";
+  m.style.top = Math.max(0, Math.min(b.bottom, innerHeight - m.offsetHeight)) + "px";
+  const away = ev => { if (!m.contains(ev.target) && ev.target !== anchor) DLV.closeMenu(); };
+  const esc = ev => { if (ev.key === "Escape") DLV.closeMenu(); };
+  document.addEventListener("mousedown", away, true); document.addEventListener("keydown", esc, true);
+  DLV.menuOff = () => { document.removeEventListener("mousedown", away, true); document.removeEventListener("keydown", esc, true); };
+  const first = m.querySelector(".dlvItem"); if (first) first.focus();
 };
 
 DLV.rowItems = (row, kinds) => kinds.map(k => ({ row: row.id, kind: k }));
@@ -104,16 +160,17 @@ DLV.strip = function (rowEl, name) {
   let old = th.querySelector(".tdel"); if (old) old.remove();
   if (!row) return;
   const strip = document.createElement("div"); strip.className = "tdel";
+  const cur = () => DLV.rowFor(name) || row;
   const get = k => () => { const r = DLV.rowFor(name); return r ? r[k] : { state: "none", n: 0, why: "" }; };
-  const hs = DLV_KINDS.map(([k, label]) => DLV.handle(label, k, get(k), () => DLV.rowItems(DLV.rowFor(name) || row, [k]), k === "midi" ? DLV_TEMPO : ""));
+  const hs = DLV_KINDS.map(([k, label]) => DLV.handle(label, k, get(k), () => DLV.rowItems(cur(), [k]), k === "midi" ? DLV_TEMPO : "", [{ kind: k, row: row.id }]));
   if (DLV.collapsed(th)) {
     // one handle (the first kind that is ready, MIDI then Spike) and a small menu with the three
-    const pick = () => { const r = DLV.rowFor(name) || row; return ["midi", "spike", "audio"].find(k => r[k].state === "ready") || "midi"; };
-    const one = DLV.handle("Drag", "one", () => { const r = DLV.rowFor(name) || row; return r[pick()]; }, () => DLV.rowItems(DLV.rowFor(name) || row, [pick()]));
+    const pick = () => ["midi", "spike", "audio"].find(k => cur()[k].state === "ready") || "midi";
+    const one = DLV.handle("Drag", "one", () => cur()[pick()], () => DLV.rowItems(cur(), [pick()]), "", [{ kind: "midi", row: row.id }]);
     const more = document.createElement("button"); more.className = "btn mini dlvM"; more.textContent = "…"; more.title = "The three kinds of this DAW track";
     more.onclick = ev => {
-      const r = DLV.rowFor(name) || row, b = more.getBoundingClientRect();
-      openCtxItems(DLV_KINDS.map(([k, label]) => [k, `${label}: ${DLV.text(r[k])}`, () => { if (r[k].state === "off") DLV.want(k); else if (r[k].state === "ready") DLV.drag(DLV.rowItems(r, [k])); }]), b.left, b.bottom);
+      const r = cur();
+      DLV.menu(more, DLV_KINDS.map(([k, label]) => ({ kind: k, label, get: () => cur()[k], items: () => DLV.rowItems(cur(), [k]), wants: [{ kind: k, row: r.id }] })));
       ev.stopPropagation();
     };
     strip.classList.add("collapsed");
@@ -126,29 +183,28 @@ DLV.strip = function (rowEl, name) {
 /* The toolbar. */
 DLV.bar = function () {
   let bar = document.getElementById("dlvBar"); if (bar) bar.remove();
+  DLV.closeMenu();
   const anchor = document.getElementById("exportAllBtn");
   if (!anchor) return;
   bar = document.createElement("span"); bar.id = "dlvBar"; bar.className = "dlvBar";
   const rows = () => DLV.rowsOf();
   const aggK = k => () => DLV.agg(rows().map(r => r[k]));
   const all = () => { const l = [aggK("midi")(), aggK("spike")()]; if (DLV.st && DLV.st.used.audio) l.push(aggK("audio")()); return DLV.agg(l); };
+  const allKinds = () => ["midi", "spike", ...(DLV.st && DLV.st.used.audio ? ["audio"] : [])];
   const itemsK = ks => () => rows().flatMap(r => ks.filter(k => r[k].state !== "none" && r[k].state !== "off").map(k => ({ row: r.id, kind: k })));
   const merged = () => (DLV.st ? DLV.st.merged : { state: "preparing", n: 0, why: "" });
-  const hs = [
-    DLV.handle("Drag MIDI", "midi", aggK("midi"), itemsK(["midi"]), DLV_TEMPO),
-    DLV.handle("Drag spikes", "spike", aggK("spike"), itemsK(["spike"])),
-    DLV.handle("Drag all", "all", all, itemsK(["midi", "spike", ...(DLV.st && DLV.st.used.audio ? ["audio"] : [])])),
-    DLV.handle("Drag merged MIDI", "merged", merged, () => [{ row: "", kind: "merged" }], "One MIDI track with all drums. " + DLV_TEMPO),
+  const defs = [
+    { kind: "midi", label: "Drag MIDI", get: aggK("midi"), items: itemsK(["midi"]), extra: DLV_TEMPO, wants: [{ kind: "midi" }] },
+    { kind: "spike", label: "Drag spikes", get: aggK("spike"), items: itemsK(["spike"]), extra: "", wants: [{ kind: "spike" }] },
+    { kind: "all", label: "Drag all", get: all, items: () => itemsK(allKinds())(), extra: "A press prepares the spike and the audio spike items.", wants: [{ kind: "spike" }, { kind: "audio" }, { kind: "midi" }] },
+    { kind: "merged", label: "Drag merged MIDI", get: merged, items: () => [{ row: "", kind: "merged" }], extra: "One MIDI track with all drums. " + DLV_TEMPO, wants: [{ kind: "merged" }] },
   ];
+  const hs = defs.map(d => DLV.handle(d.label, d.kind, d.get, d.items, d.extra, d.wants));
   const hint = document.createElement("span"); hint.id = "dlvHint"; hint.className = "dlvHint"; hint.textContent = DLV_HINT;
   bar._hs = hs; bar._hint = hint;
   if (innerWidth < 520) {
     const more = document.createElement("button"); more.className = "btn mini dlvM"; more.textContent = "Drag…"; more.title = "Drag the prepared items into your DAW";
-    more.onclick = ev => {
-      const b = more.getBoundingClientRect();
-      openCtxItems(hs.map(h => [h.dataset.kind, `${h.querySelector(".dlvL").textContent}: ${h.querySelector(".dlvT").textContent}`, () => h.dispatchEvent(new MouseEvent("mousedown", { button: 0, clientX: 0, clientY: 0, bubbles: true }))]), b.left, b.bottom);
-      ev.stopPropagation();
-    };
+    more.onclick = ev => { DLV.menu(more, defs.map(d => ({ kind: d.kind, label: d.label, get: d.get, items: d.items, wants: d.wants }))); ev.stopPropagation(); };
     bar.append(more, hint);
   } else bar.append(...hs, hint);
   anchor.after(bar);

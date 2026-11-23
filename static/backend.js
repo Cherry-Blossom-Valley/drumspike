@@ -335,7 +335,7 @@ function shellMethods(invoke, T) {
        The test bridge has no host: none. */
     deliverState: () => (bridge() ? Promise.resolve(null) : invoke("plugin_deliver_state", {})),
     deliverTake: items => invoke("plugin_deliver_take", { items }),
-    deliverWant: kind => invoke("plugin_deliver_want", { kind }),
+    deliverWant: (kind, row) => invoke("plugin_deliver_want", row ? { kind, row } : { kind }),
     exportDragTake: (sid, paths) => invoke("export_drag_take", { sid, paths }),   // #433: a drag starts: the files move into Exports/ under their export names; {files}
     /* the native file drag out of the window (tauri-plugin-drag): the files must exist. The test bridge has no native drag: it records
        the paths in window.__DS_DRAG__ */

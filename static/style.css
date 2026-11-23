@@ -579,9 +579,16 @@ body.host .track.hostHidden, body.host .track.hostMerged { display: none; }   /*
 .dlvH[data-state="ready"] .dlvT { color: var(--accent); }
 .dlvH[data-state="preparing"], .dlvH[data-state="off"], .dlvH[data-state="none"] { cursor: default; opacity: 0.8; }
 .dlvH[data-state="off"] { cursor: pointer; }
-.dlvH[data-state="error"] { border-color: var(--red, #e5534b); cursor: not-allowed; }
+.dlvH[data-state="error"] { border-color: var(--red, #e5534b); }
 .dlvH[data-state="error"] .dlvT { color: var(--red, #e5534b); }
 .dlvBar { display: inline-flex; gap: 4px; align-items: center; margin-left: 6px; }
 .dlvBar .dlvH { flex-direction: row; gap: 4px; align-items: center; max-width: 200px; }
 .dlvHint { font-size: 10px; color: var(--dim); white-space: nowrap; }
 .dlvM { padding: 0 6px; }
+.dlvH[data-state="error"] { cursor: pointer; }
+.dlvH:focus-visible, .dlvItem:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.dlvMenu { position: fixed; z-index: 50; min-width: 180px; background: var(--panel); border: 1px solid var(--line); border-radius: 4px; padding: 2px; display: flex; flex-direction: column; gap: 1px; }
+.dlvItem { padding: 4px 8px; font-size: 11px; color: var(--text, #d6dbe4); cursor: grab; user-select: none; border-radius: 3px; white-space: nowrap; }
+.dlvItem:hover { background: var(--panel2, #1d222b); }
+.dlvItem[data-state="preparing"], .dlvItem[data-state="none"] { opacity: 0.6; cursor: default; }
+.dlvItem[data-state="off"], .dlvItem[data-state="error"] { cursor: pointer; }

@@ -117,14 +117,18 @@ Rule of the coordinator: prepared files live only in the default `Exports/` fold
 #579 stays; no new write path). The producer writes to `Exports/.prepared/` (hidden, below the default folder, made by the
 producer with `create_dir_all`). The dialog tiles use `Exports/.drag/` and clear it on close; the two folders do not meet.
 
-A drag does not move the prepared file (the dialog does: `export_drag_take` renames). The prepared set must stay valid for the
-next drag. Ruling R5: the WORKER makes the final-name file in `Exports/` (a hard link, `fs::hard_link`; a copy when the link fails; both folders
-are on one volume) as part of "ready". A copy that still runs means `preparing`. `plugin_deliver_take` makes no file: it only
-checks `fp` and the files and answers their paths, so nothing heavy runs at the press and never on the main thread. The file in `Exports/` is what the DAW gets. A new preparation
-writes a NEW file in `.prepared/` (temporary name, rename), and the worker replaces the link in `Exports/` when the new set is ready
-(the kind is `preparing` meanwhile, so no drag takes the old link). This keeps the contract of the dialog: "Exports/ gets a file
-only by a drag or an export", the file names are the export names, and a DAW that references the file in place does not see it
-change under it. Asking the user to delete old clips before a new drop is the hint of the audit (item 8).
+Round 2 (review of 5ef6d03), the rule that holds now: the worker writes ONLY inside `Exports/.prepared/`. It never creates, replaces or deletes a
+file in `Exports/` itself, so a file of the user in `Exports/` (the export of the dialog, a file kept by hand) is never touched. A set in `.prepared/`
+is written under a temporary name and renamed, so the old file keeps its inode and its bytes.
+
+A take (the start of a drag, `plugin_deliver_take`) hard-links each prepared file into the fixed plugin-owned folder `Exports/Dragged/` under its final
+name (the same folder tree, so a link works; there is no copy fallback: a failed link is an error with its reason and no drag starts). When the name
+exists there, the same file (the same inode) is reused; another file of that name is never replaced: the new file is numbered (`Snare_spike 2.mid`).
+The plugin never deletes anything in `Exports/Dragged/`. So a DAW that references a dropped file in place never sees it change, and a new drop
+after an edit brings a new numbered file; the hint of the audit (item 8), delete the old clips before the new drop, still applies. The link is made
+on the request thread of the take (one `link` call per file, no copy): nothing heavy runs at the press and nothing runs on the main thread. A take
+checks that the prepared file exists; a set whose file is gone is not ready, it is stale and is made again. The drag command accepts files that
+are directly in `Exports/Dragged/` (written by this editor), as before for `Exports/`.
 
 Generation. Each prepared set (row, kind) carries `fp`, a 64-bit hash of everything the file is made from:
 
@@ -184,13 +188,31 @@ Cost, with numbers from the code:
   cost in line: an edit in one row writes one file. Ruling R3 defers it.
 - Audio spike: reads the source and writes the same length, plus the sum for a multi-source row. The flags "spike used" and "audio
   used" are in memory per document and start `off` after a reopen.
-- Disk: one prepared file per (row, kind) in `.prepared/`, plus links in `Exports/`. The producer removes the files of a row
-  that is gone, and the whole folder when the editor of the last instance of the document closes. A prepared file is removed only
-  inside `.prepared/`. Rule of size (ruling R11): at each wake the worker removes every set whose row or kind no longer exists
-  and every temporary file; the folder is bounded at 2 GiB: a job whose file would take the folder over that sum fails with `error:
-  prepared items exceed 2 GB`. `.prepared/` is a fixed child of the default folder written only by the plugin; no user path reaches
-  it, and the exact-path rule for user destinations (#579) does not change. A file name is made by `file_stems` from the row name, so
-  a hostile row name (`../x`, `/abs`, empty, 300 characters) stays one safe name inside the folder; a fault run proves the stage can see a name that leaves it.
+- Disk, the true rule (round 2): one prepared file per (row, kind) in `.prepared/`. At every pass the worker removes the files that no ready
+  set holds (an old set, a temporary file, the set of a row that is gone) inside `.prepared/` only. The folder itself stays until the user deletes it
+  (there is no removal at the close of the last editor: the sets stay valid for the next open). `Exports/Dragged/` is never cleaned: what was
+  delivered stays. Bound (ruling R11, S8): before a wav file is written the size is estimated (`ceil(song end x rate) x 4` bytes: float 32, one
+  channel) and the job is refused with `error: not enough room for the prepared files (limit 2 GiB)` when the estimate and the bytes already in `.prepared/`
+  (every file, temporary files too, minus the file it replaces) are over 2 GiB; the real size is checked again before the rename. Not bounded by the
+  2 GiB: `Exports/Dragged/` (it holds links, so no extra bytes until the prepared file is replaced; then the old bytes live on in the delivered file),
+  and the memory of the audio-spike sum of a row with several sources: it holds one float 32 buffer per source, refused above 1 GiB with `error: not enough
+  memory for the audio spikes of this row`. `.prepared/` is a fixed child of the default folder written only by the plugin; no user path reaches it, and
+  the exact-path rule for user destinations (#579) does not change. The name of a file is made by `file_stems` and `final_names` from the row name, so
+  a hostile row name (`../x`, `/abs`, empty, 300 characters) stays one safe name; `make` also refuses, before any write, a path whose parent is not
+  `.prepared/` (a unit test with `../`, `/abs` and `a/b`; the fault run `raw-name` shows the bad name reaching that check, which refuses it: the state is an error).
+- Why the wav sets can take longer than the 3 s quiet time (the 9.4 s of round 1): the quiet time counts from the LAST wake, and the page's status poll
+  (`analyze_status`, every 2 s, answer `done`) woke the worker at every answer through `changed_after` (the "ended" branch), so while any poll ran the
+  quiet time restarted every 2 s. That was a defect. Now a command that writes the project wakes the worker, and a `done` answer wakes it ONCE for the job
+  (`Prep::command_done`, unit test). The check keeps the trace switch `DS_ARA_PREPARE_TRACE` that shows each wake with its caller.
+- A failed job: the handle shows the error; a press on it (mouse, Enter or Space), a take, and a back-off (5 s, doubled each time, at most 60 s) start it
+  again. A new state of the hits (the `fp` changes) starts the watchdog again and the old failure no longer counts.
+- A pass with no export folder (the service is open and gives none) marks every handle `error: no export folder`, not `preparing`.
+- Memory of the worker and the thread: the closures of `Prep` hold the document weakly (the document owns the preparation: a strong clone was a cycle that
+  nothing freed). The worker ends when the preparation is freed, and `prepare::stop_all` (called by `unload_worker` before the library can be unmapped)
+  stops every worker thread and waits for them (at most 1.5 s). The fault `forever` waits for the stop sign or for the end of the document.
+- Two rows with one note (the merged file): the hits of the rows merge on that pitch. Each hit keeps its own note-on and its own note-off, none is
+  lost or doubled (a unit test with overlapping notes of two rows on one pitch); a player that does not count overlapping notes of one pitch ends the
+  first note at the first note-off. The rows of a kit have their own notes, so this is the rare case.
 
 ## 7. The handles in the page (host mode only)
 
@@ -314,19 +336,16 @@ last full run.
 
 ## 12. Stages and fault runs
 
-Each new stage has a fault run that fails for its named reason. Names are proposals.
+Each new stage has a fault run that fails for its named reason. These are the names as built (round 2).
 
-| Stage | What it proves | Fault run |
+| Stage / test | What it proves | Fault run |
 |---|---|---|
-| `prepare-rows` (unit + CLAP) | one file per DAW track and kind with the hits of all clips of the row at song time (two sources in one row, a source in two rows, a clip moved in the DAW); names = row names plus suffix, equal names numbered; the file bytes read back (ticks within 1 sample, spike samples) | `DS_ARA_PREPARE_FAULT=per-source`: one file per source, the stage sees two files for one row |
-| `prepare-state` | after a round and after an edit the sets become `ready` by themselves; a take during `preparing` answers 409; an old set is never taken after an edit; a state never stays `preparing` (30 s watchdog, shortened by `DS_ARA_PREPARE_WAIT_MS`); both wav kinds are `off` until their first press | `stale-ok`: the take ignores `fp` (an old set is taken); `forever`: no job ends (the watchdog must fire) |
-| `prepare-follower` | a follower row prepared after an edit of its leader carries the refreshed hits (R4) | `no-refresh`: the producer reads the stored hits, the stage sees the old ones |
-| `prepare-names` | a hostile row name (`../x`, `/abs`, empty, 300 chars) gives a safe name inside `.prepared/`; orphaned sets are removed; the 2 GiB bound (R11) | `raw-name`: the row name is used as given, the stage sees a file outside the folder |
-| `prepare-cost` | an edit in one row prepares only that row (count of jobs); no work in an audio callback (`OFF_AUDIO` stays 0, the allocation test of `threads`) | `all-rows`: every row prepares on each edit |
-| `deliver-handles` | the REAL page in the REAL editor in host mode: three handles in a row header, four in the toolbar, states from the plugin event, the collapse to one handle at the small height and under 520 px; a press and a move on a handle runs `plugin_deliver_take` and the drag command up to the private pasteboard (files in `Exports/`, `session: test`); the hint text | `no-collapse`: the collapse rule is off, the stage sees three handles at the small size |
-| `deliver-merged` | the merged file has one note track, the notes of all drums, bytes of one track equal the per-drum file | `two-tracks`: the writer makes one track per drum |
-| `deliver-standalone` (page tests in `tests/`) | with `hostMode()` false no handle, no element, no listener; every existing page test keeps its expected value | `leak`: the handles show without the mode |
-| `export-dialog` (exists) | line 7 | `no-remember` (exists) |
+| stage `deliver`, run `base` (no edit) | `deliver-rows`: one MIDI file per DAW track with the hits of all clips at their song positions; `deliver-wav`: one spike and one audio-spike file per DAW track, each hit at its song sample; `deliver-size`: the spike files have the computed size (4 bytes x ceil(song end x rate) + a header under 2000); `deliver-merged`; `deliver-state`; `deliver-drag` (private pasteboard, 6 files in `Exports/Dragged/`); `deliver-prepared-folder`; `deliver-exports-clean` (the worker wrote no file in `Exports/`); `deliver-handles` | `per-source` (rows), `two-tracks` (merged) |
+| stage `deliver`, run `edit` (three edits 400 ms apart, scenario `user-file`) | `deliver-stale` (a take at once is refused, the set becomes ready by itself, the new hit is in the MIDI file and the merged file); `deliver-spike-after` (the spike file of the edited row has a spike at every hit, the new ones too); `deliver-user-file` (a file of the user in `Exports/` has the same bytes after preparation, takes and edits); `deliver-delivered-keeps` (new numbered files, the first ones untouched); `deliver-cost` (four jobs, not a pass for each edit) | `stale-ok`, `link-exports` (the old behaviour changes the user's file), `all-rows`, `no-debounce` |
+| stage `deliver`, run `names` | `deliver-file-names`: rows `Snare` and `Snare_audio` give six different file names without case, the later audio file is numbered | `no-file-numbering` |
+| stage `deliver`, run `watchdog` / `hostile` | `deliver-watchdog` (a job that never ends: error, not preparing for ever); `deliver-hostile-name` (`../evil`, `/abs`: files stay in `.prepared/`) | `forever` with `no-watchdog`; `raw-name` |
+| page tests `tests/e2e_app/test_host_deliver.py` | handles, states, collapse, the menu items as drag sources with no synthetic mouse event, no listener left on `document` after the menu closes, keyboard Enter and Space, `role="button"` and `aria-label`, Drag all prepares both spike kinds, the standalone page has nothing | `leak` (a page test that must fail the standalone check) |
+| `export-dialog` (exists) | line 7, and (unchanged expectation) 4 MIDI and 4 WAV files in `Exports/` | `no-remember` (exists) |
 
 Rust unit tests: `prepare.rs` (the mapping per row, names, `fp` changes for each input, the state machine), `merged_midi_bytes`.
 JS: `static/deliver.js` in `JS_FILES` with 70 percent line coverage by `tests/e2e_app` (a page test with the test bridge).
@@ -352,7 +371,7 @@ One commit per line or pair, risky parts first. This note is commit 1 (Gate line
    takes the rate of the first source.
 4. (Settled by R4: the same refresh as the export.)
 5. Whether a DAW takes MIDI and WAV in one drag ("Drag all"): hand check (R6).
-6. Hard link in `Exports/`: if the volume refuses links, the worker copies; the kind is `preparing` until the copy ends (R5).
+6. Hard link into `Exports/Dragged/` (round 2): a volume that refuses links gives `error: could not link ...` and no drag; there is no copy fallback.
 8. The tempo source of a real LUNA session is unknown (section 9). If it is `none`, the MIDI is right only at 120 BPM.
 9. Rows that the page cannot show (`HT.dropped`: every source already the home of another row) get no header, so no handles; the
    toolbar still delivers them. The status line already counts them.
@@ -374,6 +393,7 @@ One commit per line or pair, risky parts first. This note is commit 1 (Gate line
 - The only change outside `plugins/ara` and `static/` is `merged_midi_bytes` and `export_merged_midi` in `crates/core/src/midi.rs` (about 55
   lines with doc comments, two unit tests; nothing in `crates/app`).
 - `plugin_deliver_state` starts the worker once; a poll of the page wakes nothing (the page asks again every 1.5 s while a handle is `preparing`).
+- Superseded by round 2 (see section 5): the worker no longer links into `Exports/`; a take links into `Exports/Dragged/`.
 - The drag limit is 512 files (`deliver::drag_count_ok`, unit test); `plugin_deliver_take` refuses more with `error: more than 512 items in one drag`.
 - A dropped row (`HT.dropped`) is named in the hint line beside the toolbar handles (R10).
 - Stage `deliver` (parts `deliver-ran`, `-rows`, `-wav`, `-size`, `-merged`, `-state`, `-drag`, `-prepared-folder`, `-handles`, `-stale`, `-cost`,

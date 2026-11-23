@@ -134,18 +134,128 @@ def test_a_preparing_handle_is_asked_about_again_by_the_page(host):
     host.wait_for_function("() => window.__asked > 0", timeout=4000)
 
 
+def track_listeners(page):
+    """Counts the listeners that the page adds to `document` and has not removed (type, function, capture)."""
+    page.evaluate("""() => { if (window.__ls) return; window.__ls = new Map(); window.__synth = 0;
+      const add = document.addEventListener.bind(document), rem = document.removeEventListener.bind(document);
+      const key = (t, o) => t + '|' + (o === true || (o && o.capture) ? 'c' : 'b');
+      document.addEventListener = (t, f, o) => { const m = window.__ls.get(key(t, o)) || new Set(); m.add(f); window.__ls.set(key(t, o), m); return add(t, f, o); };
+      document.removeEventListener = (t, f, o) => { const m = window.__ls.get(key(t, o)); if (m) m.delete(f); return rem(t, f, o); };
+      add('mousedown', e => { if (!e.isTrusted) window.__synth++; }, true); }""")
+
+
+def listeners(page):
+    return page.evaluate("() => [...window.__ls.values()].reduce((n, s) => n + s.size, 0)")
+
+
+def open_menu(host, name):
+    host.locator("#lanesScroll .track[data-name='%s'] .dlvM" % name).click()
+    host.wait_for_selector("#dlvMenu .dlvItem")
+
+
 def test_a_small_row_and_a_narrow_window_collapse_the_three_handles_to_one_and_a_menu(host):
     give(host, payload())
     host.evaluate("() => { setTrackHeight('small'); DLV.paint(); }")
     host.wait_for_function("() => !FR.raf && FR.flags === 0")
     row = handles(host, "#lanesScroll .track[data-name='%s'] .tdel" % FOUR[0][0])
     assert [h["kind"] for h in row] == ["one"], row
-    host.locator("#lanesScroll .track[data-name='%s'] .dlvM" % FOUR[0][0]).click()
-    labels = host.evaluate("() => [...document.querySelectorAll('#ctxMenu button')].map(b => b.textContent)")
+    open_menu(host, FOUR[0][0])
+    labels = host.evaluate("() => [...document.querySelectorAll('#dlvMenu .dlvItem')].map(b => b.textContent)")
     assert [l.split(":")[0] for l in labels] == ["MIDI", "Spike", "Audio spike"]
     host.keyboard.press("Escape")
+    assert host.locator("#dlvMenu").count() == 0
     host.evaluate("() => { setTrackHeight('large'); DLV.paint(); }")
     assert len(handles(host, "#lanesScroll .track[data-name='%s'] .tdel" % FOUR[0][0])) == 3
+
+
+def test_a_ready_menu_item_is_a_drag_source_and_no_listener_is_left_after_the_menu_closes(host):
+    give(host, payload())
+    host.evaluate("() => { setTrackHeight('small'); DLV.paint(); }")
+    host.wait_for_function("() => !FR.raf && FR.flags === 0")
+    track_listeners(host)
+    before = listeners(host)
+    open_menu(host, FOUR[0][0])
+    assert listeners(host) > before, "the open menu has its listeners"
+    press_move(host, "#dlvMenu .dlvItem[data-kind='midi']")
+    host.wait_for_function("() => window.__calls.length > 0")
+    assert host.evaluate("() => window.__calls[0]") == ["take", [{"row": "q1", "kind": "midi"}]], "a press and a move on the item is the drag: no click first"
+    assert host.locator("#dlvMenu").count() == 0, "the menu closed with the drag"
+    assert listeners(host) == before, "no listener of the handles or the menu is left on the document"
+    assert host.evaluate("() => window.__synth") == 0, "no synthetic mouse event anywhere"
+    # closed by a click away
+    open_menu(host, FOUR[0][0])
+    host.mouse.click(5, 300)
+    assert host.locator("#dlvMenu").count() == 0
+    assert listeners(host) == before
+    host.evaluate("() => { setTrackHeight('large'); DLV.paint(); }")
+
+
+def test_a_mouse_move_after_a_click_on_a_menu_item_starts_no_drag(host):
+    give(host, payload())
+    host.evaluate("() => { setTrackHeight('small'); DLV.paint(); }")
+    host.wait_for_function("() => !FR.raf && FR.flags === 0")
+    open_menu(host, FOUR[0][0])
+    box = host.locator("#dlvMenu .dlvItem[data-kind='spike']").bounding_box()
+    host.mouse.click(box["x"] + 5, box["y"] + 5)   # press to prepare: the work starts, nothing is dragged
+    host.wait_for_function("() => window.__calls.length > 0")
+    assert host.evaluate("() => window.__calls") == [["want", "spike"]]
+    host.evaluate("() => { window.__calls.length = 0; window.__DS_DRAG__ = []; }")
+    host.mouse.move(box["x"] + 200, box["y"] + 100, steps=5)
+    host.mouse.move(box["x"] + 10, box["y"] + 10, steps=5)
+    host.wait_for_timeout(200)
+    assert host.evaluate("() => [window.__calls.length, (window.__DS_DRAG__ || []).length]") == [0, 0]
+    host.evaluate("() => { setTrackHeight('large'); DLV.paint(); }")
+
+
+def test_the_narrow_toolbar_menu_works_the_same_way(host):
+    give(host, payload())
+    host.set_viewport_size({"width": 480, "height": 700})
+    host.evaluate("() => DLV.paint()")
+    track_listeners(host)
+    before = listeners(host)
+    host.locator("#dlvBar .dlvM").click()
+    host.wait_for_selector("#dlvMenu .dlvItem")
+    labels = host.evaluate("() => [...document.querySelectorAll('#dlvMenu .dlvItem')].map(b => b.dataset.kind)")
+    assert labels == ["midi", "spike", "all", "merged"]
+    press_move(host, "#dlvMenu .dlvItem[data-kind='merged']")
+    host.wait_for_function("() => window.__calls.length > 0")
+    assert host.evaluate("() => window.__calls[0]") == ["take", [{"row": "", "kind": "merged"}]]
+    assert listeners(host) == before
+    host.set_viewport_size({"width": 1280, "height": 720})
+    host.evaluate("() => DLV.paint()")
+
+
+def test_a_handle_is_a_button_with_a_label_and_the_keyboard_prepares_and_retries(host):
+    give(host, payload(midi=err("it failed"), spike=S_OFF))
+    h = host.locator("#lanesScroll .track[data-name='%s'] .dlvH[data-kind='midi']" % FOUR[0][0])
+    assert h.get_attribute("role") == "button" and h.get_attribute("tabindex") == "0"
+    assert h.get_attribute("aria-label") == "MIDI, error, press to retry"
+    assert "Press to try again" in h.get_attribute("title")
+    h.focus(); host.keyboard.press("Enter")   # error: a new try
+    host.wait_for_function("() => window.__calls.length > 0")
+    assert host.evaluate("() => window.__calls[0]") == ["want", "midi"]
+    host.evaluate("() => { window.__calls.length = 0; }")
+    s = host.locator("#lanesScroll .track[data-name='%s'] .dlvH[data-kind='spike']" % FOUR[0][0])
+    assert s.get_attribute("aria-label") == "Spike, press to prepare"
+    s.focus(); host.keyboard.press(" ")
+    host.wait_for_function("() => window.__calls.length > 0")
+    assert host.evaluate("() => window.__calls[0]") == ["want", "spike"]
+    # a press on an error handle (mouse) is a new try as well
+    host.evaluate("() => { window.__calls.length = 0; }")
+    box = h.bounding_box()
+    host.mouse.click(box["x"] + 5, box["y"] + 5)
+    host.wait_for_function("() => window.__calls.length > 0")
+    assert host.evaluate("() => window.__calls[0]") == ["want", "midi"]
+
+
+def test_a_press_on_drag_all_with_the_spike_kinds_off_prepares_both(host):
+    give(host, payload())
+    box = host.locator("#dlvBar .dlvH[data-kind='all']").bounding_box()
+    assert "prepares the spike and the audio spike" in host.locator("#dlvBar .dlvH[data-kind='all']").get_attribute("title")
+    host.mouse.click(box["x"] + 5, box["y"] + 5)
+    host.wait_for_function("() => window.__calls.length >= 2")
+    kinds = [c[1] for c in host.evaluate("() => window.__calls")]
+    assert "spike" in kinds and "audio" in kinds
 
 
 def test_a_row_the_page_cannot_show_is_named_in_the_hint(host):
