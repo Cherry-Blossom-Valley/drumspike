@@ -346,6 +346,12 @@ pub fn remember_folder(file: &Path, canon: &Path) -> std::io::Result<()> {
     save_folders(file, &list)
 }
 
+/// M1c3 (R6): a drag carries 1 to [`crate::prepare::MAX_DRAG_FILES`] files; more is refused whole, never cut.
+#[must_use]
+pub fn drag_count_ok(n: usize) -> bool {
+    (1..=crate::prepare::MAX_DRAG_FILES).contains(&n)
+}
+
 /// A path the page may hand to a drag: absolute, a regular file, its folder is one of `roots` (canonical), and the
 /// plugin instance wrote it itself in this process (`written`: the paths that its exports and drag takes answered).
 /// Returns the canonical path.

@@ -46,6 +46,7 @@ pub mod keys;
 pub mod musical;
 pub mod names;
 pub mod playback;
+pub mod prepare;
 pub mod rows;
 pub mod selection;
 pub mod service;
@@ -507,6 +508,8 @@ struct DocShared {
     /// M1b8: the gate of the `plugin-regions` messages (at most one in 50 ms, the newest always arrives) and how many changes it was offered (the unit test counts).
     rows_gate: Arc<Mutex<selection::PushGate>>,
     rows_pushes: AtomicUsize,
+    /// M1c3 (#576): the preparation of the files that leave the plugin (made on first use, by `prep()`).
+    prep: std::sync::OnceLock<Arc<prepare::Prep>>,
 }
 
 /// The regions and the rate to map the notes of a source with: those of the last round when
@@ -626,6 +629,7 @@ impl DocShared {
             rows_gen: AtomicU64::new(0),
             rows_gate: Arc::new(Mutex::new(selection::PushGate::default())),
             rows_pushes: AtomicUsize::new(0),
+            prep: std::sync::OnceLock::new(),
             canceller: svc.canceller(),
             id: Mutex::new(id),
             svc: Mutex::new(svc),
@@ -1085,6 +1089,7 @@ impl DocShared {
             session().log(json!({"event": "rows_dropped", "doc": self.id(), "clips": bad}).to_string());
         }
         self.rows_pushes.fetch_add(1, Ordering::SeqCst);
+        self.wake_prep();
         let offer =
             self.rows_gate
                 .lock()
@@ -1104,6 +1109,46 @@ impl DocShared {
             }
             selection::Offer::Later { schedule: false } => {}
         }
+    }
+
+    /// M1c3: the preparation of this document (made at the first use; it keeps a clone of the document for its inputs).
+    fn prep(self: &Arc<Self>) -> Arc<prepare::Prep> {
+        self.prep
+            .get_or_init(|| {
+                let (d1, d2, d3) = (self.clone(), self.clone(), self.clone());
+                prepare::Prep::new(
+                    self.page.clone(),
+                    Arc::new(move || d1.rows_value()),
+                    Arc::new(move || d2.song_tempo()),
+                    Arc::new(move || d3.source_files()),
+                )
+            })
+            .clone()
+    }
+
+    /// M1c3: something that the prepared files are made from changed.
+    fn wake_prep(&self) {
+        if let Some(p) = self.prep.get() {
+            p.wake();
+        }
+    }
+
+    /// M1c3: the cached audio file and the sample rate of every source that has a track, by track name.
+    fn source_files(&self) -> HashMap<String, (PathBuf, u32)> {
+        let members: Vec<Arc<SourceState>> = self
+            .members
+            .lock()
+            .map(|m| m.iter().filter_map(std::sync::Weak::upgrade).collect())
+            .unwrap_or_default();
+        members
+            .iter()
+            .filter(|s| !s.removed.load(Ordering::SeqCst))
+            .filter_map(|s| {
+                let key = s.track.lock().ok().and_then(|t| t.clone())?;
+                let wav = s.wav.lock().ok().and_then(|w| w.clone())?;
+                Some((key, (wav, s.props().sample_rate as u32)))
+            })
+            .collect()
     }
 
     /// M1b10: the tracks of the document as the display name rule needs them: the track name, the
@@ -1263,6 +1308,8 @@ impl DocShared {
             session().log(row.to_string());
         }
         *cur = snap;
+        drop(cur);
+        self.wake_prep();
     }
 
     /// M1c1: the regions for the song-time export, `(source index, region)`, and the sources whose clips are all gone.
@@ -2420,6 +2467,7 @@ impl Session {
             return false; // nothing had changed
         }
         doc.region_gen.fetch_add(1, Ordering::SeqCst);
+        doc.wake_prep();
         if let Ok(mut rr) = doc.round_regions.lock() {
             // the regions of the snapshots the notes were made with (R6), not of the live ones
             for (seq, r) in &result.regions {
@@ -2877,7 +2925,9 @@ fn backend_of_doc(doc: &Arc<DocShared>) -> editor::Backend {
     let p8 = doc.clone();
     let p9 = doc.clone();
     let p10 = doc.clone();
+    let prep = doc.prep();
     editor::Backend {
+        prep,
         page: doc.page.clone(),
         changed: Arc::new(move || {
             let _ = send(session(), Msg::PageSync(d.clone()));
