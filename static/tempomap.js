@@ -283,6 +283,17 @@ function drawBeatsRuler(c) {
   if (x1 >= 0 && x1 <= W) { ctx.strokeStyle = col.accent; ctx.beginPath(); ctx.moveTo(x1, 0); ctx.lineTo(x1, H); ctx.stroke(); }
 }
 
+/* #575: in a DAW the host owns the tempo. The page draws the map of the host and edits none of it: the typed tempo, the typed meter, the
+   bar-1 field and drag, a step drag, Delete on a step, Set Bar 1 and the commit all stop here with one text. A tempo edit used to write the
+   map of the service and the page then drew the map of the host again, so the edit looked lost. When the host gives no tempo there is no map
+   (nothing is drawn, no edit starts) and the text says so. The markers ruler is not part of the tempo and stays. With the mode off this
+   returns false at once and the page is as before. */
+function tmHostLocked() {
+  if (!hostMode()) return false;
+  setMsg(TM.map ? "The DAW gives the tempo: change it in the DAW. The rulers only show it."
+    : "The DAW gives no tempo: the rulers stay empty and the MIDI file has the tempo the export dialog names.");
+  return true;
+}
 /* Selecting, adding, editing and deleting. */
 function tmDown(kind, ev) {
   if (ev.button !== 0) return;
@@ -301,6 +312,7 @@ function tmDown(kind, ev) {
    once (TM.grid and TM.mk cleared, like the bar-1 drag); the drop is one tmCommit, so one undo step.
    The start marker is the tempo in force, not a change: not draggable (as Delete refuses it). */
 function tmTempoDrag(it, ev) {
+  if (tmHostLocked()) return;
   const orig = TM.map, i = it.i, cx0 = ev.clientX, px0 = rulerXOf(ev), gap = 0.001;
   let t = it.t, moved = false, copy = null;
   const lo = i > 0 ? orig.steps[i - 1].t + gap : gap, hi = i + 1 < orig.steps.length ? orig.steps[i + 1].t - gap : Infinity;
@@ -348,6 +360,7 @@ function tmDouble(kind, ev) {
   if (it) tmEditStart(kind, it);
 }
 function tmEditStart(kind, it) {
+  if (kind !== "markers" && tmHostLocked()) return;
   tmEditEnd(false);
   spLeave("map");   // a strip would move the markers away from the field
   const inp = $("#mapEdit"), row = document.querySelector(`#mapRulers .mrow[data-ruler="${kind}"]`);
@@ -415,6 +428,7 @@ function tmDeleteSel() {   // Delete (or Edit > Delete Hit) with a marker select
     return true;
   }
   if (!s || !TM.map) return false;
+  if (tmHostLocked()) return true;   // #575
   if (!s.del) { setMsg(`the start ${s.kind === "tempo" ? "tempo" : "meter"} stays: edit its value`); return true; }
   const next = JSON.parse(JSON.stringify(TM.map));
   if (s.kind === "tempo") next.steps.splice(s.i, 1); else next.changes.splice(s.i, 1);
@@ -426,6 +440,7 @@ function tmDeleteSel() {   // Delete (or Edit > Delete Hit) with a marker select
    Bars|Beats ruler (a field with the time in seconds) and a drag of that marker move bar 1 only: the tempo, the steps, the meter
    and the meter changes stay. One undo step through tmCommit, as every tempo map edit. */
 function tmSetBar1(t) {
+  if (tmHostLocked()) return Promise.resolve(false);   // #575
   if (!TM.map || !S.sid) { setMsg("bar 1: open a project first"); return Promise.resolve(false); }
   const next = JSON.parse(JSON.stringify(TM.map));
   next.bar1_s = Math.max(0, t);
@@ -449,6 +464,7 @@ function tmBar1Hit(px) {   // true when x (ruler coordinates) is on the bar-1 ma
 function tmBeatsDown(ev) {
   if (ev.button !== 0 || !S.sid || !tmBar1Hit(rulerXOf(ev))) return rulerDown(ev);
   ev.preventDefault();
+  if (hostMode()) { tmHostLocked(); return; }   // #575: no drag of bar 1 in a DAW
   if (TM.edit) tmEditEnd(true);
   const orig = TM.map, x0 = ev.clientX;
   let t = orig.bar1_s, moved = false;
@@ -499,6 +515,7 @@ async function tmCommitStartTempo(next) {
   } catch (e) { return tmCommit(next, `tempo ${tmBpmText(b)} BPM, bar 1 stays: ${errText(e)}`); }
 }
 function tmCommit(next, what) {
+  if (tmHostLocked()) return Promise.resolve(false);   // #575: the net under every path above
   const sid = S.sid;
   return tmQueue(async () => {
     if (sid !== S.sid) return false;
