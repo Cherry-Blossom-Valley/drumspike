@@ -147,7 +147,7 @@ def spike_event(page, row, kind, song_t, dx=0):
     page.evaluate("""([n, kind, t, dx]) => {
       const c = document.querySelector(`.track[data-name="${CSS.escape(n)}"] canvas.spike`), x = GEO.laneX + tToX(t, laneWidth()) + dx, r = c.getBoundingClientRect();
       const ev = new MouseEvent(kind, { bubbles: true, cancelable: true, button: 0, clientX: x, clientY: r.top + r.height / 2 });
-      (kind === 'mousemove' || kind === 'mouseup' ? window : c).dispatchEvent(ev); }""", [row, kind, song_t, dx])
+      (kind === 'mouseup' ? window : c).dispatchEvent(ev); }   // the drag listens for the move on the lane and for the release on the window""", [row, kind, song_t, dx])
 
 
 def wait_idle(page):

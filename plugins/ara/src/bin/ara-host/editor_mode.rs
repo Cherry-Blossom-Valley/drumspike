@@ -1338,6 +1338,10 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                     doc_pump(&doc);
                 }
             }
+            if got && mode == "song" {
+                // M1b8: the notes for the host after the page's edit (the first notes of the run are made before any edit)
+                doc.print_all_notes("after-song", None);
+            }
             ((*gui).destroy.expect("gui.destroy"))(plugin);
             if !got {
                 failed = Some(format!(

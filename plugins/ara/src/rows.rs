@@ -96,14 +96,30 @@ pub struct Rows {
     pub song_end: f64,
 }
 
-/// A name for a row: the name of the sequence, else the name of its first region, else the key of its first source.
-fn pick(seq: Option<&SeqFact>, region_name: Option<&str>, key: &str) -> String {
-    crate::names::pick_label(seq.and_then(|q| q.name.as_deref()), region_name).unwrap_or_else(|| key.to_string())
+/// A name for a row: the name of the sequence, else the name of its first region, else the key of its first source. `nf` is the fault run
+/// of the names (`DS_ARA_NAMES_FAULT`): it breaks the same rule here as for the display names of the tracks.
+fn pick(seq: Option<&SeqFact>, region_name: Option<&str>, key: &str, nf: crate::names::Fault) -> String {
+    if nf.ignore {
+        return key.to_string();
+    }
+    let seq_name = seq.and_then(|q| q.name.as_deref());
+    let picked = if nf.region_first {
+        crate::names::pick_label(region_name, seq_name)
+    } else {
+        crate::names::pick_label(seq_name, region_name)
+    };
+    picked.unwrap_or_else(|| key.to_string())
 }
 
 /// The rows of a document. `seqs` are the region sequences by id.
 #[must_use]
 pub fn build(sources: &[SrcFacts], seqs: &HashMap<u64, SeqFact>) -> Rows {
+    build_with(sources, seqs, crate::names::Fault::default())
+}
+
+/// [`build`] with the fault run of the names (`DS_ARA_NAMES_FAULT`).
+#[must_use]
+pub fn build_with(sources: &[SrcFacts], seqs: &HashMap<u64, SeqFact>, nf: crate::names::Fault) -> Rows {
     struct Acc {
         id: String,
         /// 0: a DAW track; 1: a row of a source with no sequence or no region
@@ -129,7 +145,7 @@ pub fn build(sources: &[SrcFacts], seqs: &HashMap<u64, SeqFact>) -> Rows {
             let at = *index.entry(id.clone()).or_insert_with(|| {
                 let q = seqs.get(&seq_id);
                 accs.push(Acc {
-                    name: pick(q, src.region_name.as_deref(), &src.key),
+                    name: pick(q, src.region_name.as_deref(), &src.key, nf),
                     id,
                     group,
                     order: q.and_then(|q| q.order).unwrap_or(i32::MAX),
@@ -180,7 +196,7 @@ pub fn build(sources: &[SrcFacts], seqs: &HashMap<u64, SeqFact>) -> Rows {
         let base = a.name.clone();
         let mut shown = base.clone();
         let mut n = 2;
-        while taken.contains(&shown.to_lowercase()) {
+        while !nf.no_number && taken.contains(&shown.to_lowercase()) {
             shown = format!("{base} ({n})");
             n += 1;
         }

@@ -6899,7 +6899,7 @@ def song_parts(run: dict) -> dict:
 def song_edit_run(label: str, arg: str, env: dict | None = None) -> dict:
     """Mode `song` with `--arg edit` (a double click in the second clip of the first DAW track and one in the gap) or `--arg base` (none)."""
     rc, _summary, rows = run_phase(label, "song", CLAP, env, ["--seq-names", "Kick", "Snare", "--seq-of", "0", "0", "1", "1", "--regions-all", "0,1.5,0", "--regions-step", "2", "--arg", arg, *(["--wait-sync"] if arg == "edit" else [])])
-    return {"rc": rc, "rows": rows, "notes": host_notes_of(host_lines(label), "editor")}
+    return {"rc": rc, "rows": rows, "notes": host_notes_of(host_lines(label), "after-song")}
 
 
 def song_edit_parts(edit: dict, base: dict) -> dict:
