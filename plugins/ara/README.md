@@ -480,6 +480,7 @@ variants, because the hand checks in a DAW need them.
 | `DS_ARA_PREPARE_WAIT_MS` | scenario | a number of milliseconds | the watchdog of the prepared files (default 30000): how long a handle may stay preparing before it says error |
 | `DS_ARA_PREPARE_QUIET_MS` | scenario | a number of milliseconds | the quiet time before the MIDI files are made again after a change (default 800; the wav kinds wait three times as long) |
 | `DS_ARA_PREPARE_TRACE` | scenario | any value | the preparation writes a report row prepare_wake (file and line of the caller, time) for each wake of its worker |
+| `DS_ARA_DEFAULTS_FAULT` | fault | lose-kept | (#577) lose-kept: the settings that the archive holds for a source with no result are dropped in its first round (the way of main before #577) |
 
 Kinds: **config**: The plugin reads it in every build, the delivery build too (the check sets it for every run; the hand checks in a DAW need it). **check**: Read by the check only. **fault**: Fault switch: breaks one line of the gate on purpose, so the check of that line can fail. Read only by a build with the cargo feature `test-switches` (the gate build); a delivery build ignores it. **scenario**: Scenario switch: sets up a case for a stage (not a fault). Read only by a build with the cargo feature `test-switches`; a delivery build ignores it.
 

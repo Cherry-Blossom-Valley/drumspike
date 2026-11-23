@@ -2849,6 +2849,15 @@ impl Session {
             if let Some(id) = &id {
                 svc.set_id(id);
             }
+            // #577 (Q4): the settings of the sources that the archive holds with no result wait for their first round
+            let kept: std::collections::HashMap<String, serde_json::Map<String, Value>> = {
+                let st = worker_doc.settings.lock().unwrap_or_else(|e| e.into_inner());
+                st.iter()
+                    .filter(|(k, _)| !tracks.iter().any(|t| &t.track == *k))
+                    .filter_map(|(k, v)| v.as_object().map(|o| (k.clone(), o.clone())))
+                    .collect()
+            };
+            svc.keep_settings(kept);
             let result = svc.restore(&tracks)?;
             Ok((result, svc.id().to_string(), svc.folder(), svc.home()))
         });

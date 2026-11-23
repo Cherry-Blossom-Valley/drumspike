@@ -482,6 +482,9 @@ pub struct DocService {
     page: std::sync::Arc<PageHandle>,
     /// A test aid: the next calls of `tracks_restore` in a round fail (R2).
     pub fail_restores: usize,
+    /// #577 (Q4): the settings that the archive holds for a source that has no result yet (F5). The first round makes the new
+    /// record of that track and lays them over it, so the values of the session win over any start value.
+    kept: HashMap<String, Map<String, Value>>,
 }
 
 /// The home folder of the service of a document: inside the document's folder, so inside
@@ -664,7 +667,13 @@ impl DocService {
             canceller: Canceller::default(),
             page,
             fail_restores: 0,
+            kept: HashMap::new(),
         }
+    }
+
+    /// #577 (Q4): set the settings of the sources that the archive holds with no result (see `kept`).
+    pub fn keep_settings(&mut self, kept: HashMap<String, Map<String, Value>>) {
+        self.kept = kept;
     }
 
     /// The handle the editor window uses to reach the service without the document lock.
@@ -991,8 +1000,17 @@ impl DocService {
             if let Some(b) = bytes {
                 role_audio.push((name.clone(), b, track.role_source.as_ref().and(track.role.clone())));
             }
-            rows.push(json!({"name": name, "index": at, "order_index": at,
-                "track": serde_json::to_value(track).unwrap_or(Value::Null)}));
+            let mut record = serde_json::to_value(track).unwrap_or(Value::Null);
+            // #577 (Q4): a source that the archive held with no result: the settings of the session win over the new record
+            // (`DS_ARA_DEFAULTS_FAULT=lose-kept` is the fault run: they are dropped, as main did)
+            if let Some(kept) = self.kept.remove(name) {
+                if switch("DS_ARA_DEFAULTS_FAULT").as_deref() != Some("lose-kept") {
+                    if let Some(v) = overlay_settings(&record, &kept) {
+                        record = v;
+                    }
+                }
+            }
+            rows.push(json!({"name": name, "index": at, "order_index": at, "track": record}));
             track_of.insert(s.seq, name.clone());
         }
         if !rows.is_empty() {
@@ -1944,6 +1962,31 @@ mod tests {
             regions: Vec::new(),
             label: None,
         }
+    }
+
+    /// #577 (Q4): a source that the archive holds with no result keeps the settings of the session in its first round.
+    #[test]
+    fn a_source_held_without_a_result_keeps_its_session_settings_in_its_first_round() {
+        let cache = scratch("kept");
+        let id = new_doc_id();
+        let mut doc = DocService::new(cache.clone(), id.clone());
+        let mut kept = HashMap::new();
+        let mut m = Map::new();
+        m.insert("role".into(), json!("tom"));
+        m.insert("role_source".into(), json!("user"));
+        m.insert("note".into(), json!(41));
+        m.insert("params".into(), json!({"min_gap_ms": 77}));
+        kept.insert("snare".to_string(), m);
+        doc.keep_settings(kept);
+        // the file name says snare, the session says tom with note 41: the session wins
+        let src = snapshot_of(&cache, &id, 0, "snare.wav");
+        doc.analyse(std::slice::from_ref(&src), false).unwrap();
+        let svc = doc.service().unwrap();
+        let sid = doc.sid.clone().unwrap();
+        let got = settings_of(&svc, &sid, &["snare".to_string()]).unwrap();
+        assert_eq!(got["snare"]["role"], "tom");
+        assert_eq!(got["snare"]["note"], 41);
+        assert_eq!(got["snare"]["params"]["min_gap_ms"], 77);
     }
 
     fn scratch(tag: &str) -> PathBuf {
