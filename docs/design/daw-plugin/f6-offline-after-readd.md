@@ -1,6 +1,6 @@
 # F6 (#582): a track is offline after the plugin is removed from one track and added on another
 
-Status: fixed in the plugin. The standalone page and the app are not changed (one host-mode text, see Fix).
+Status: fixed in the plugin. The standalone page and the app are not changed.
 
 ## What was seen
 
@@ -65,8 +65,11 @@ A restored source carries a mark `repair` until its audio is read. When the read
 4. A failed repair (the service is busy with a job of the page) is tried again every 100 ms for as long as the other
    retries of the worker run. If the read fails, nothing is claimed: the mark stays, and the next good read repairs
    the track without a user action.
-5. Host-mode text: the page text of an offline track names "relink". In host mode (`hostWords`) it says "the DAW has
-   to deliver its audio again". With the mode off the text is the text of today.
+5. No page text is changed. The text of an offline track names "relink" (it comes from the app). A host-mode word
+   mapping in `static/` was tried and taken out: the stage `standalone-diff` allows no file outside `plugins/ara/` and
+   `docs/design/daw-plugin/`. After this fix the state that shows the text (an audio file the service cannot match)
+   does not outlive a good read. A failed read leaves the old text until the next good read repairs the track; a
+   DAW-worded text for that case is a separate change (it needs `static/`).
 
 ## Stages
 

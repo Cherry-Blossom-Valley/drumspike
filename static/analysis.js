@@ -248,7 +248,7 @@ function markTrackErrors(tracks) {   // a red mark and the message in the header
     row.classList.toggle("terr", !!t && t.state === "error");
     if (t && t.state === "error") {
       const m = document.createElement("div"); m.className = "terrmark";
-      m.textContent = `analysis failed: ${hostWords(t.error || "failed")}`; m.title = m.textContent + (t.error_detail ? `\n(${t.error_detail})` : "");
+      m.textContent = `analysis failed: ${t.error || "failed"}`; m.title = m.textContent + (t.error_detail ? `\n(${t.error_detail})` : "");
       row.querySelector(".thead").appendChild(m);
     }
   });

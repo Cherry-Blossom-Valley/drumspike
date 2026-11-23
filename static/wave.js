@@ -219,7 +219,7 @@ function drawWave(canvas, name) {
   const gen = canvas._gen = (canvas._gen || 0) + 1;   // P4-26: a draw that waits for its samples is dropped when a newer draw of this lane came meanwhile
   ctx.clearRect(0,0,W,H);
   ctx.fillStyle = "#101318"; ctx.fillRect(0,0,W,H);
-  if (!p) { ctx.fillStyle = "#7d8593"; ctx.fillText(S.peakErr[name] ? `cannot draw this track: ${hostWords(S.peakErr[name])}` : "no peaks — re-analyze", 10, 20); return; }
+  if (!p) { ctx.fillStyle = "#7d8593"; ctx.fillText(S.peakErr[name] ? `cannot draw this track: ${S.peakErr[name]}` : "no peaks — re-analyze", 10, 20); return; }
   if (p.tiles) { ensureArrays(name); return; }   // P3-6b: the page holds the tiles in the engine only; the 2D path loads the arrays
   const sr = p.sr, span0 = S.view.t0*sr, spanS = viewDur()*sr, span1 = span0+spanS;   // P4-1b fix: the span of viewDur
   const mid = H/2, color = trackColor(name);
