@@ -127,7 +127,7 @@ function applyOp(op, reverse) {   // a step of the service (shift, add, del, mov
    step (a standalone project, or a row with one source) it is that step itself, so the standalone undo path is the one of today. */
 async function groupApplyOp(op, reverse, apply) {   // all or nothing: a refused step takes the steps before it back, so the stacks stay as the service is
   const list = reverse ? op.steps.slice().reverse() : op.steps, done = [];
-  const run = async (s, rev) => { try { const r = (apply || applyOp)(s, rev); return r && typeof r.then === "function" ? !!(await r) : true; } catch (e) { return false; } };
+  const run = async (s, rev) => { try { const r = (apply || applyOp)(s, rev); return r === false ? false : r && typeof r.then === "function" ? !!(await r) : true; } catch (e) { return false; } };
   for (const s of list) {
     if (await run(s, reverse)) { done.push(s); continue; }
     for (const d of done.reverse()) await run(d, !reverse);
