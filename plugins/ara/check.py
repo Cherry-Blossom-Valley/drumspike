@@ -6917,7 +6917,9 @@ def song_edit_parts(edit: dict, base: dict) -> dict:
     added = e["n_after"] - e["n_before"]
     gap_ok = "outside every region" in (e.get("gap_msg") or "") and e["home_after"] == e["home_before"]
     parts: dict = {}
-    want_sample = round(e["want_src_t"] * sr)
+    # the double click is a pixel position: the stored source time is the one of that pixel (within 0.02 s of the wanted time), and the note is its sample
+    stored = [t for t in e.get("added_at", []) if abs(t - e["want_src_t"]) <= 0.02]
+    want_sample = round(stored[0] * sr) if stored else round(e["want_src_t"] * sr)
     en, bn = edit["notes"], base["notes"]
     changed = sorted(k for k in set(en) | set(bn) if (en.get(k) or []) != (bn.get(k) or []))
     new_s = sorted(set(en.get(changed[0]) or []) - set(bn.get(changed[0]) or [])) if len(changed) == 1 else []
@@ -6925,7 +6927,7 @@ def song_edit_parts(edit: dict, base: dict) -> dict:
     parts["editor-song-edit"] = (
         added == 1 and gap_ok and len(new_s) == 1 and abs(new_s[0] - want_sample) <= 1,
         f"a double click at song {e['want_song_t']:.3f} s in the second clip of the first DAW track adds {added} hit (want 1) to the SECOND source, stored at source time {e['want_src_t']:.3f} s = sample "
-        f"{want_sample}; the host notes of the sources that changed ({changed}) gained the samples {new_s} (want one within 1 sample of {want_sample}; the song time would be sample {song_sample}); "
+        f"{want_sample} (to the pixel: the stored time is {stored}); the host notes of the sources that changed ({changed}) gained the samples {new_s} (want one within 1 sample of {want_sample}; the song time would be sample {song_sample}); "
         f"a double click in the gap between the clips adds none and says {e.get('gap_msg')!r}"
         + ("" if added == 1 and new_s and abs(new_s[0] - want_sample) <= 1 else ": no hit was stored at the source time (the song time was stored, or none at all)"))
     parts["editor-song-store"] = (

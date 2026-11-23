@@ -1057,7 +1057,7 @@ impl DocShared {
     /// M1b8: a region, a sequence or a round changed: when the rows differ from what the page was told last, the page gets
     /// the new rows as the event `plugin-regions` (the same answer as `plugin_host_regions`).
     fn rows_changed(&self) {
-        if crate::test_switch("DS_ARA_EDITOR_FAULT").as_deref() == Ok("no-reload") {
+        if crate::test_switch("DS_ARA_NAMES_FAULT").as_deref() == Ok("no-reload") {
             return; // the fault run: the page is told of no change of the DAW tracks (the way of the display names)
         }
         let mut last = self.rows_pushed.lock().unwrap_or_else(|e| e.into_inner());
