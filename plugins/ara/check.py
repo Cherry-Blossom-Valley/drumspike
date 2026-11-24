@@ -8325,7 +8325,7 @@ def stage_export_dialog_fault() -> bool:
 
 # ---------------------------------------------------------------- M1c4 (#589): the export dialog makes one file per DAW track
 
-def export_rows_run(label: str, env: dict | None = None, stuck: bool = False) -> dict:
+def export_rows_run(label: str, env: dict | None = None, stuck: bool = False, late: bool = False) -> dict:
     """The REAL Export dialog in the REAL page (mode exportrows) on the host of the stage deliver (a DAW track with clips of three audio files, one with one
     file). The folder sheet is answered by DS_ARA_PICK_DIR; `other` is a folder that the plugin must refuse (it is empty at the end), `pick/sub` exists for the
     fault run prefix-dest."""
@@ -8338,7 +8338,7 @@ def export_rows_run(label: str, env: dict | None = None, stuck: bool = False) ->
     pick, other = pick.resolve(), other.resolve()
     e = {"DS_ARA_PICK_DIR": str(pick), "DS_ARA_DRAG_PRESSED": "1"}
     e.update(env or {})
-    arg = "stuck" if stuck else f"{other};{pick}"
+    arg = "stuck" if stuck else "late" if late else f"{other};{pick}"
     rc, summary, rows = editor_run(f"exrows-{label}", "exportrows", CLAP, 1, e, [*DELIVER_ARGS, "--arg", arg], timeout=500)
     reps = page_reports(rows, "exportrows")
     return {"rc": rc, "rep": reps[0] if reps else {}, "rows": rows, "pick": pick, "other": other, "base": base.resolve(),
@@ -8429,19 +8429,38 @@ def export_rows_stuck_parts(d: dict) -> dict:
                                   f"a set that never gets ready: the dialog names the DAW track, writes nothing and stops ({msg!r}; files written {written})")}
 
 
+def export_rows_late_parts(d: dict) -> dict:
+    """A hit is added while the export copies (the fault slow-copy keeps the copy open for 2.5 s): the check of the hits after the copy refuses the old files, the dialog
+    waits and delivers the new set. The MIDI file of the first DAW track must hold the new hit."""
+    r = d["rep"]
+    exports = next(iter(sorted(d["cache"].glob("documents/*/project/Exports"))), d["cache"] / "none")
+    rows = (r.get("regions") or {}).get("rows", [])
+    f = exports / "Kick_spike.mid"
+    want = deliver_expected(r, (rows[0]["id"], [(r.get("edit") or {}).get("song", 0.0)])).get(rows[0]["id"], []) if rows and r.get("edit") else []
+    got = midi_note_times(f) if f.is_file() else []
+    late = {x.get("label"): x for x in r.get("steps", [])}.get("late", {})
+    tmps = [x.name for x in exports.glob(".*.tmp")] if exports.is_dir() else []
+    return {"export-rows-late": (bool((r.get("edit") or {}).get("ok")) and late.get("export_finished", True) is not False and len(got) == len(want) > 0
+                                 and all(abs(a - b) <= 2 / 48000 for a, b in zip(got, want)) and not tmps,
+                                 f"a hit added while the export copies: the check after the copy refused the old files and the new set was delivered ({len(got)} notes, want {len(want)}; temporary files {tmps}; result {late.get('result')!r})")}
+
+
 def stage_export_rows() -> bool:
     if not HOST.exists() or not CLAP.exists():
         return pass_fail("export-rows", False, "no host or bundle: run check.sh build")
     ok = print_parts("", export_rows_parts(export_rows_run("clap")))
     d = export_rows_run("stuck", {"DS_ARA_PREPARE_FAULT": "forever,no-watchdog"}, stuck=True)
-    return print_parts("", export_rows_stuck_parts(d)) and ok
+    ok = print_parts("", export_rows_stuck_parts(d)) and ok
+    d = export_rows_run("late", {"DS_ARA_PREPARE_FAULT": "slow-copy"}, late=True)
+    return print_parts("", export_rows_late_parts(d)) and ok
 
 
 def stage_export_rows_fault() -> bool:
-    ok = True
+    d = export_rows_run("fault-no-late-check", {"DS_ARA_PREPARE_FAULT": "slow-copy,no-late-check"}, late=True)
+    ok = fault_part("export-rows-fault-no-late-check", export_rows_late_parts(d), "export-rows-late", "the hits are not checked again after the copy: the old files are delivered although a hit changed")
     for label, env, part, what in (
         ("per-source", {"DS_ARA_PREPARE_FAULT": "per-source"}, "export-rows-files", "one file per audio file, as the old dialog made them: the file set is not one file per DAW track"),
-        ("stale-ok", {"DS_ARA_PREPARE_FAULT": "stale-ok"}, "export-rows-wait", "a copy that ignores the state of the hits writes the old file after an edit"),
+        ("stale-ok", {"DS_ARA_PREPARE_FAULT": "stale-ok,no-late-check"}, "export-rows-wait", "a copy that ignores the state of the hits, before and after the copy, writes the old file after an edit"),
         ("any-dest", {"DS_ARA_EDITOR_FAULT": "any-dest"}, "export-rows-forged-dest", "any folder is allowed: a file lands in a folder that was never chosen"),
         ("prefix-dest", {"DS_ARA_EDITOR_FAULT": "prefix-dest"}, "export-rows-forged-dest", "a subfolder of the chosen folder is allowed"),
         ("trust-name", {"DS_ARA_PREPARE_FAULT": "trust-name"}, "export-rows-forged-name", "a name that the page sends is used: a file lands outside the folder"),

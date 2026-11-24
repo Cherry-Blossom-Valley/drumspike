@@ -920,6 +920,20 @@
       await exportNow("stuck", 40000);
       out.default = EX.def; post(Object.assign({ kind: "exportrows" }, out)); return;
     }
+    if (OTHER === "late") {   // a hit changes while the export copies (the fault slow-copy keeps the copy open): the dialog must deliver the NEW set
+      await ready("#exDragMidi"); await ready("#exDragSpikes");
+      var rowL = out.regions.rows[0], homeL = rowL.srcs[0], clipL = rowL.clips.filter(function (c) { return c.src === homeL; })[0];
+      var nL = EX.done;
+      q("#exGo").click();
+      out.notice_late = await answerNotice();
+      await sleepE(600);
+      var edL = await inv("events_edit", { sid: S.sid, name: homeL, ops: [{ op: "add", t: clipL.a + 1.07, v: 100 }] });
+      out.edit = { ok: edL.ok, song: clipL.s + 1.07 };
+      await until(function () { return EX.done > nL && !EX.busy; }, 120000);
+      await sleepE(300);
+      snap("late");
+      post(Object.assign({ kind: "exportrows" }, out)); return;
+    }
     await ready("#exDragMidi");
     snap("open");
     var plan = await inv("plugin_deliver_plan", { items: out.rows.map(function (r) { return { row: r.id, kind: "midi" }; }) }); out.plan = plan;

@@ -194,7 +194,13 @@ function exHostNote() {
   el.textContent = parts.join(". ") + ".";
   el.classList.remove("hidden");
 }
-async function exInfo() {   // the replace count of the current options (the newest answer wins)
+/* #589 round 2: in a DAW the plan call of a change waits 150 ms: a burst of changes (the options, the states of the plugin) makes ONE call, the newest wins. */
+function exInfo() {
+  if (!hostMode()) return exInfoRun();
+  clearTimeout(EX.infoTimer);
+  return new Promise(ok => { EX.infoTimer = setTimeout(() => ok(exInfoRun()), 150); });
+}
+async function exInfoRun() {   // the replace count of the current options (the newest answer wins)
   const my = ++EX.infoSeq;
   if (!exFormats().length || !exTrackSets().names.length) { EX.replace = 0; exRender(); return; }
   try {
@@ -405,7 +411,11 @@ async function exRun() {
     $("#exResultText").textContent = msg.replace(/^exported/, "Exported");
     $("#exResult").classList.toggle("hidden", !EX.lastFile);
     exInfo();
-  } catch (e) { hideProgress(); setMsg(`export failed: ${e.message}`, "error"); setMsgDetail(e.detail); EX.destNote = errText(e); }
+  } catch (e) {
+    hideProgress();
+    if (hostMode() && /cancelled: nothing was written/.test(String(e.message))) setMsg("export cancelled: nothing was written");   // N8
+    else { setMsg(`export failed: ${hostMode() ? String(e.message).replace(/^(409|500): /, "") : e.message}`, "error"); setMsgDetail(e.detail); EX.destNote = errText(e); }
+  }
   finally { EX.busy = false; EX.done++; if (EX.open) exRender(); }   // #172: done is the export-finished event
 }
 /* #589: Export in a DAW. The plugin copies the files that it prepared for the chosen DAW tracks into the folder (all or nothing). A set that is not ready for
@@ -423,7 +433,8 @@ async function exHostExport() {
       return r;
     } catch (e) {
       const m = String(e && e.message || e), waiting = e && e.status === 409 && /(^|: )(preparing|not prepared yet)/.test(m.replace(/^409: /, ""));
-      if (!waiting || EX.cancel) throw e;
+      if (waiting && EX.cancel) throw new Error("cancelled: nothing was written");   // a cancel during the wait is a cancel, not a failure
+      if (!waiting) throw e;
       last = m.replace(/^409: /, "").split(": ")[0];
       if (Date.now() - t0 > limit) throw new Error(`${last && !/^preparing$/.test(last) ? last : "a DAW track"} is not ready after ${Math.round(limit / 1000)} s: nothing was written`);
       start = false;

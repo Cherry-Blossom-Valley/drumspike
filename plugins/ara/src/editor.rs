@@ -1431,7 +1431,7 @@ fn deliver_plan(sh: &Arc<Shared>, cmd: &str, args: &Value) -> Answer {
             let files: Vec<Value> = names
                 .iter()
                 .map(|(row, kind, name, track)| {
-                    let exists = std::fs::symlink_metadata(dest.join(name)).is_ok_and(|m| !m.is_dir());
+                    let exists = crate::prepare::replaces(&dest.join(name));
                     json!({"row": row, "kind": kind.word(), "name": name, "track": track, "exists": exists})
                 })
                 .collect();
@@ -1465,7 +1465,14 @@ fn deliver_export(sh: &Arc<Shared>, cmd: &str, args: &Value) -> Answer {
             note_written(sh, &v);
             Answer::json(200, &v)
         }
-        Err((code, text)) => Answer::err(code, text),
+        Err(e) if !e.written.is_empty() || !e.not_written.is_empty() => {
+            // a rename failed after others were done: the answer lists both
+            Answer::json(
+                e.code,
+                &json!({"code": e.code, "message": e.text, "written": e.written, "not_written": e.not_written}),
+            )
+        }
+        Err(e) => Answer::err(e.code, e.text),
     }
 }
 

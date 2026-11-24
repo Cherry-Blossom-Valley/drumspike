@@ -51,6 +51,7 @@ def test_the_dialog_lists_daw_tracks_and_exports_one_item_per_track_and_kind(hos
     host.wait_for_function("() => document.querySelector('#exDragMidi').dataset.state === 'ready'")
     assert host.evaluate("() => [document.querySelector('#exDragMidi .exDragN').textContent, document.querySelector('#exDragSpikes .exDragN').textContent]") == ["3 files", "3 files"]
     assert "source" not in host.evaluate("() => document.querySelector('#exportModal').innerText").lower()
+    host.wait_for_function("() => window.__calls.some(c => c[0] === 'plan') && document.querySelector('#exReplace').textContent === '2 files will be replaced'")
     want = [{"row": r, "kind": k} for k in ("midi", "spike") for r in ("q1", "q2", "s3")]
     assert calls(host, "plan")[-1][1] == want
     assert host.locator("#exReplace").inner_text() == "2 files will be replaced"
@@ -224,3 +225,31 @@ def test_the_standalone_page_has_no_drop_hint(app, make_project):
     app.wait_for_function("() => !document.querySelector('#exportModal').classList.contains('hidden')")
     assert app.evaluate("() => [document.getElementById('dlvHint'), document.getElementById('exDragHint')]") == [None, None]
     app.evaluate("() => exClose()")
+
+
+def test_a_burst_of_changes_makes_one_plan_call_in_host_mode(host):
+    """#589 round 2 (S4): the replace count is asked once for a burst of changes (150 ms, the newest wins)."""
+    give(host, payload(spike=S_READY))
+    open_dialog(host)
+    host.wait_for_function("() => window.__calls.some(c => c[0] === 'plan')")
+    host.wait_for_timeout(400)
+    host.evaluate("() => { window.__calls = []; exInfo(); exInfo(); exInfo(); EX.midi = false; exChanged(); EX.midi = true; exChanged(); }")
+    host.wait_for_timeout(600)
+    assert len(calls(host, "plan")) == 1, calls(host, "plan")
+
+
+def test_a_cancel_during_the_wait_says_cancelled_and_a_partial_write_is_told_in_plain_words(host):
+    give(host, payload(midi=S_PREP))
+    open_dialog(host)
+    host.evaluate("""() => { EX.tempoAck = true; EX.waitMs = 20000;
+      B.deliverExport = async () => { const e = new Error('409: Drum A: preparing'); e.status = 409; throw e; }; }""")
+    host.locator("#exGo").click()
+    host.wait_for_function("() => EX.busy")
+    host.locator("#exCancel").click()
+    host.wait_for_function("() => !EX.busy", timeout=10000)
+    assert host.locator("#stMsg").inner_text() == "export cancelled: nothing was written"
+    host.evaluate("""() => { EX.done = 0; B.deliverExport = async () => { const e = new Error('500: 2 of 5 files were written: a.mid, b.mid. Not written: C, D, E. Press Export again. (C: could not write the file: x)'); e.status = 500; throw e; }; }""")
+    host.locator("#exGo").click()
+    host.wait_for_function("() => EX.done > 0 && !EX.busy")
+    msg = host.locator("#stMsg").inner_text()
+    assert msg.startswith("export failed: 2 of 5 files were written: a.mid, b.mid. Not written: C, D, E. Press Export again."), msg

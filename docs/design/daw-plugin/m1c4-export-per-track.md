@@ -203,3 +203,21 @@ Measures (printed by a script that I will add under `plugins/ara/`, run with the
 
 Not proved by these: a real DAW, a real folder sheet, a copy to a slow or network volume, the time on the owner's disk (the numbers are from
 this machine).
+
+## Round 2 (review of f1ee950)
+
+- M1: before the first rename the export checks every target (a folder in the way, a protected file, a read-only file). When a rename still fails, the files before it
+  are complete and the answer lists the files written and the DAW tracks not written; the dialog says: "2 of 5 files were written: a.mid, b.mid. Not written: C, D, E.
+  Press Export again." Every temporary file is removed.
+- S2: one export at a time (a flag per document; a second call answers 409 "an export is running" and changes nothing of the first). The same row and kind twice is one
+  file. A temporary name is `.<name>.dsx-<pid>-<n>.tmp`, created new (an existing file of that name is never cut or followed).
+- S3: a guard removes the temporary files on an error, a cancel and a panic. At the start of an export the plugin removes the temporary files of its own pattern that an
+  earlier export of this process left, or that are older than an hour; any other file stays.
+- S4: a poll that waits wakes the worker only for a set that is `off` or in error (a set that is `preparing` needs no look); the first call of an export wakes it once. The
+  poll gathers once. The page asks for the replace count once per 150 ms (the newest wins).
+- S5: tests for the hits that change during the copy, a copy that fails, a protected file through the real list of the service, and a stage part `export-rows-late` with a
+  fault run `no-late-check` (the stage keeps the copy open with `slow-copy` and adds a hit). `stale-ok` now skips only the check before the copy.
+- S6: a prepared file that is gone when the copy opens it is a 409 "preparing"; the page waits.
+- N8: a cancel during the wait says "export cancelled: nothing was written". N10: `plan.exists` and `replaced` use `prepare::replaces`.
+- N7: the state of a set is read under the lock of the worker's books for the time of a `stat` per file; this is short and unchanged by this ticket, no change.
+  N9: the second `canonicalize` (the folder of the prepared files against the chosen folder) is cheap and runs once per call, no change.
