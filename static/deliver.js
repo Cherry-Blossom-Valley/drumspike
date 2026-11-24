@@ -46,8 +46,10 @@ DLV.text = function (s) {
   return w.length > 40 ? w.slice(0, 37) + "…" : w;
 };
 /* The badge of a handle in a row header (#592: the header is 230 px wide, three handles with the whole state text do not fit and lay on the
-   role drawing): the count when ready, else one sign. The whole text stays in the tooltip, in the screen reader label and in `.dlvT`. */
-DLV.badge = s => (s.state === "ready" ? String(s.n) : s.state === "preparing" ? "…" : s.state === "off" ? "+" : s.state === "error" ? "!" : "–");
+   role drawing): the count when ready, else one sign. The whole text stays in the tooltip, in the screen reader label and in `.dlvT`.
+   A tile has a fixed width, so the badge is 3 signs at most: from 1000 hits it counts in thousands ("1k", "12k"; the tooltip has the number). */
+DLV.count = n => (n < 1000 ? String(n) : n < 100000 ? `${Math.floor(n / 1000)}k` : "99k");
+DLV.badge = s => (s.state === "ready" ? DLV.count(s.n) : s.state === "preparing" ? "…" : s.state === "off" ? "+" : s.state === "error" ? "!" : "–");
 DLV.title = function (label, s, extra) {   // no word "file" or "folder" in what the user reads (the host page test of the visible words)
   const why = s.state === "error" ? `error: ${s.why}. Press to try again` : s.state === "none" ? "no hits" : s.state === "off" ? "press to prepare (a press starts it)" : s.state === "preparing" ? "preparing: made in the background" : `ready (${s.n}). Drag it into your DAW with the mouse. Keyboard: use Export… (Cmd+E)`;
   return `${label}: ${why}. ${DLV_HINT}.${extra ? " " + extra : ""}`;
@@ -193,8 +195,7 @@ DLV.strip = function (rowEl, name, narrow) {
   } else { strip.append(...hs); strip._hs = hs; }
   th.appendChild(strip);
   strip._hs.forEach(h => h._paint());
-  // #592: the three never run out of their place: when they do not fit (long counts) the row gets the one handle with the menu
-  if (!narrow && !strip.classList.contains("collapsed") && strip.scrollWidth > strip.clientWidth + 1) DLV.strip(rowEl, name, true);
+  return strip;
 };
 
 /* The toolbar. */
@@ -234,7 +235,11 @@ DLV.hintText = function () {
 
 DLV.paint = function () {
   if (!DLV.live() || !DLV.ready) return;
-  document.querySelectorAll("#lanesScroll .track").forEach(el => DLV.strip(el, el.dataset.name));
+  const made = [];
+  document.querySelectorAll("#lanesScroll .track").forEach(el => { const s = DLV.strip(el, el.dataset.name); if (s && !s.classList.contains("collapsed")) made.push([el, s]); });
+  // #592: the tiles have a fixed width, so only the width of the header decides the fit. A strip that is wider than its place (a narrow header)
+  // becomes the one handle with the menu. All strips are made first and measured in one pass (one layout, not one per row).
+  made.filter(([, s]) => s.scrollWidth > s.clientWidth + 1).forEach(([el]) => DLV.strip(el, el.dataset.name, true));
   DLV.bar();
   DLV.repaint();
 };

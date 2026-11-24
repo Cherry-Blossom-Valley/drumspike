@@ -440,5 +440,6 @@ Found in a DAW: three handles with a label line and a state line were wider than
 
 - A handle of a row header is a small tile: an icon and a badge over a small label (MIDI, Spike, Audio). Picture: `m1c5-handles.png`.
 - The badge is the count when ready, `…` preparing, `+` press to prepare, `!` error, `–` no hits. The whole state text is in the tooltip and in the screen reader label.
-- The strip ends before the role drawing. Tiles that do not fit (long counts) fall back to the one handle with the menu.
+- A tile has a fixed width, so the fit never depends on a count. From 1000 hits the badge counts in thousands (`1k`, `12k`); the tooltip has the number.
+- The strip ends before the role drawing. A header that is too narrow for the three tiles gets the one handle with the menu. All strips are measured in one pass.
 - The toolbar handles and the menu are unchanged.
