@@ -871,7 +871,7 @@
     function sleepE(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
     function mouse(el, type) { var r = el.getBoundingClientRect(); el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, button: 0, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, detail: 1 })); }
     async function until(fn, ms) { var t0 = performance.now(); for (;;) { var v = false; try { v = await fn(); } catch (e) { /* not yet */ } if (v) return Math.round(performance.now() - t0); if (performance.now() - t0 > ms) return -1; await sleepE(80); } }
-    function inv(c, a) { return window.__TAURI__.core.invoke(c, a || {}).then(function (v) { return { ok: true, v: v }; }, function (e) { return { ok: false, code: e && e.status, msg: String(e && (e.message || e)) }; }); }
+    function inv(c, a) { return window.__TAURI__.core.invoke(c, a || {}).then(function (v) { return { ok: true, v: v }; }, function (e) { return { ok: false, code: e && (e.code || e.status), msg: String(e && (e.message || e)) }; }); }
     function tile(id) { var t = q(id); return t ? { state: t.dataset.state, text: String(t.querySelector(".exDragN").textContent || "") } : null; }
     function snap(label) {
       var r = { label: label, dest: q("#exDest") ? q("#exDest").value : null, problem: txt("#exProblem"), replace: txt("#exReplace"), go_disabled: q("#exGo").disabled,
@@ -883,12 +883,12 @@
     var btn = document.getElementById("hostMenuBtn"), panel = document.getElementById("hostMenu");
     async function openFromMenu() {
       mouse(btn, "mousedown"); mouse(btn, "mouseup"); btn.click();
-      if (!(await until(function () { return DSHostMenu.isOpen(); }, 3000))) return "the click did not open the menu";
+      if ((await until(function () { return DSHostMenu.isOpen(); }, 3000)) < 0) return "the click did not open the menu";
       var g = panel.querySelector('[data-group="File"]'); if (!g) return "no File group";
       g.click(); await sleepE(100);
       var it = panel.querySelector('[data-cmd="export"]'); if (!it) return "no item export";
       mouse(it, "mousedown"); mouse(it, "mouseup"); it.click();
-      if (!(await until(function () { return !q("#exportModal").classList.contains("hidden"); }, 10000))) return "the dialog did not open";
+      if ((await until(function () { return !q("#exportModal").classList.contains("hidden"); }, 10000)) < 0) return "the dialog did not open";
       return "ok";
     }
     async function answerNotice() {
@@ -937,7 +937,7 @@
     // the scope "Selected track": the single mode is off with its reason, the export holds that track only
     q("#exModeSingle").click(); await sleepE(100);
     var sel = out.regions && out.regions.rows ? out.regions.rows[0] : null;
-    EX.selected = sel ? sel.srcs[0] : S.order[0];
+    var lane = document.querySelector("#lanesScroll .track .tdel"); EX.selected = lane ? lane.closest(".track").dataset.name : (sel ? sel.srcs[0] : S.order[0]);
     q("#exScopeSel").click(); await sleepE(300);
     snap("selected");
     q("#exScopeAll").click(); await sleepE(200);

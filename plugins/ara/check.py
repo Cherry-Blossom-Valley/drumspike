@@ -8377,7 +8377,7 @@ def export_rows_parts(d: dict) -> dict:
                                  f"the MIDI file of the DAW track with three audio files holds the hits of all its clips at their song positions; wrong: {bad}; hits per track {[len(v) for v in want.values()]}")
     one, sel, st = steps.get("single", {}), steps.get("selected", {}), steps.get("open", {})
     mg = exports / "Drums_merged.mid"
-    parts["export-rows-single"] = (mg.is_file() and midi_tracks(mg) == 2 and "one MIDI track with all drums" in (one.get("single_label") or "")
+    parts["export-rows-single"] = (mg.is_file() and midi_tracks(mg) == 2 and "one midi track with all drums" in (one.get("single_label") or "").lower()
                                    and "one midi track per" not in (one.get("single_label") or "").lower() and "merged MIDI" in (steps.get("export_single", {}).get("result") or ""),
                                    f"the single file mode is the merged MIDI file (one note track: {midi_tracks(mg) if mg.is_file() else None} tracks incl. the tempo track), labelled {one.get('single_label')!r}; result {steps.get('export_single', {}).get('result')!r}")
     parts["export-rows-selected"] = (sel.get("single_disabled") is True and "needs All tracks" in (sel.get("single_title") or "") and (sel.get("sel_text") or "").startswith("Selected track (1): Kick"),
