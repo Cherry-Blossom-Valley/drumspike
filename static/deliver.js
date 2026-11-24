@@ -257,6 +257,7 @@ DLV.take = function (p) {
   const shape = !first && sig(DLV.st.rows) !== sig(p.rows);
   DLV.st = p;
   if (first || shape) DLV.paint(); else DLV.repaint();
+  if (typeof EX !== "undefined" && EX.open && hostMode()) { exRender(); if (first || shape) exInfo(); }   // #589: the open dialog follows the states (the tiles; the replace count when the tracks change)
   DLV.schedule();
   return true;
 };

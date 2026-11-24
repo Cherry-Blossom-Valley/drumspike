@@ -616,6 +616,21 @@ pub struct Prep {
     job_open: std::sync::atomic::AtomicBool,
     /// M1d4 (#578): the rows that are not done (a handle of such a row is never ready) and the rows that are only in progress.
     gate: Mutex<Option<GateFn>>,
+    /// M1c4 (#589): the progress and the cancel of the export of the dialog.
+    exp: ExportProgress,
+}
+
+/// One file of a planned export: `(row id, kind, file name, DAW track)`.
+pub type ExportName = (String, Kind, String, String);
+
+/// The export of the dialog in progress: files done of the total, the DAW track being copied, and the cancel flag (read until the first rename).
+#[derive(Default)]
+struct ExportProgress {
+    done: std::sync::atomic::AtomicUsize,
+    total: std::sync::atomic::AtomicUsize,
+    busy: std::sync::atomic::AtomicBool,
+    cancel: std::sync::atomic::AtomicBool,
+    track: Mutex<String>,
 }
 
 /// M1d4: the ids of the DAW track rows that are not done: `(id, in_progress)`. A failed or offline row is not in progress.
@@ -648,6 +663,7 @@ impl Prep {
             ended: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             job_open: std::sync::atomic::AtomicBool::new(false),
             gate: Mutex::new(None),
+            exp: ExportProgress::default(),
         })
     }
 
@@ -1011,49 +1027,7 @@ impl Prep {
             return Err((409, "error: no export folder".into()));
         };
         let fps = self.fps(&g);
-        // M1d4: a row that is not done is never taken (its handle is not ready)
-        let blocked = self.blocked();
-        if items.iter().any(|(id, _)| {
-            blocked.iter().any(|(b, _)| b == id || b == "*") || (id.is_empty() && blocked.iter().any(|(_, busy)| *busy))
-        }) {
-            return Err((409, "preparing: a track is not ready yet".into()));
-        }
-        let mut picks: Vec<PathBuf> = Vec::new();
-        {
-            let mut st = self.lock();
-            for (id, kind) in items {
-                let key = (id.clone(), *kind);
-                let files_ok = st
-                    .ready
-                    .get(&key)
-                    .is_some_and(|r| r.prepared.iter().all(|f| f.is_file()));
-                if st.ready.contains_key(&key) && !files_ok {
-                    st.ready.remove(&key); // the file is gone: the set is stale, it is made again
-                }
-                let ok = match (fps.get(&key), st.ready.get(&key)) {
-                    (Some(want), Some(r)) => *want == r.fp || has("stale-ok"),
-                    _ => false,
-                };
-                if !ok {
-                    let why = match self.state_for_fps(&st, &key, &fps) {
-                        State::Error(w) => format!("error: {w} (trying again)"),
-                        State::Off => "not prepared yet".into(),
-                        State::None => "no hits".into(),
-                        _ => "preparing".into(),
-                    };
-                    let was_error = st.failed.remove(&key).is_some();
-                    drop(st);
-                    self.wake();
-                    if was_error {
-                        self.kick(); // a press on a failed set is a new try, at once
-                    }
-                    return Err((409, format!("{}: {why}", self.name_of(&g, id))));
-                }
-                if let Some(r) = st.ready.get(&key) {
-                    picks.extend(r.prepared.iter().cloned());
-                }
-            }
-        }
+        let picks: Vec<PathBuf> = self.ready_files(&g, &fps, items)?.into_iter().map(|(_, p)| p).collect();
         if picks.len() > MAX_DRAG_FILES {
             return Err((413, format!("error: more than {MAX_DRAG_FILES} items in one drag")));
         }
@@ -1067,6 +1041,264 @@ impl Prep {
             .iter()
             .map(|p| deliver(p, &dragged).map_err(|e| (500, format!("error: {e}"))))
             .collect()
+    }
+
+    /// The prepared file of every item, when each is ready for the CURRENT state of the events (the rule of a take and of the export of the dialog:
+    /// one place). Not ready: 409 with the name of the DAW track and the state; a failed set is tried again.
+    fn ready_files(
+        self: &Arc<Self>,
+        g: &Gathered,
+        fps: &HashMap<Key, u64>,
+        items: &[(String, Kind)],
+    ) -> Result<Vec<(Key, PathBuf)>, (u16, String)> {
+        // M1d4: a row that is not done is never taken (its handle is not ready)
+        let blocked = self.blocked();
+        if items.iter().any(|(id, _)| {
+            blocked.iter().any(|(b, _)| b == id || b == "*") || (id.is_empty() && blocked.iter().any(|(_, busy)| *busy))
+        }) {
+            return Err((409, "preparing: a track is not ready yet".into()));
+        }
+        let mut picks: Vec<(Key, PathBuf)> = Vec::new();
+        let mut st = self.lock();
+        for (id, kind) in items {
+            let key = (id.clone(), *kind);
+            let files_ok = st
+                .ready
+                .get(&key)
+                .is_some_and(|r| r.prepared.iter().all(|f| f.is_file()));
+            if st.ready.contains_key(&key) && !files_ok {
+                st.ready.remove(&key); // the file is gone: the set is stale, it is made again
+            }
+            let ok = match (fps.get(&key), st.ready.get(&key)) {
+                (Some(want), Some(r)) => *want == r.fp || has("stale-ok"),
+                _ => false,
+            };
+            if !ok {
+                let why = match self.state_for_fps(&st, &key, fps) {
+                    State::Error(w) => format!("error: {w} (trying again)"),
+                    State::Off => "not prepared yet".into(),
+                    State::None => "no hits".into(),
+                    _ => "preparing".into(),
+                };
+                let was_error = st.failed.remove(&key).is_some();
+                drop(st);
+                self.wake();
+                if was_error {
+                    self.kick(); // a press on a failed set is a new try, at once
+                }
+                return Err((409, format!("{}: {why}", self.name_of(g, id))));
+            }
+            if let Some(r) = st.ready.get(&key) {
+                picks.extend(r.prepared.iter().map(|p| (key.clone(), p.clone())));
+            }
+        }
+        Ok(picks)
+    }
+
+    /// Check the items that the page names (M1c4, R10): a row id only from the live rows, a kind that exists, the merged file with no row, nothing else in
+    /// an item (no name, no path). The rows with no hit are not an error here: they have no set.
+    fn check_items(&self, g: &Gathered, items: &[Value]) -> Result<Vec<(String, Kind)>, (u16, String)> {
+        if items.is_empty() || items.len() > 2048 {
+            return Err((400, "items must list 1 to 2048 entries".into()));
+        }
+        let mut out = Vec::new();
+        for it in items {
+            let Some(o) = it.as_object() else {
+                return Err((400, "an item is {row, kind}".into()));
+            };
+            if o.keys().any(|k| k != "row" && k != "kind") && !has("trust-name") {
+                return Err((400, "an item has only a row and a kind".into()));
+            }
+            let kind = o.get("kind").and_then(Value::as_str).and_then(Kind::parse);
+            let row = o.get("row").and_then(Value::as_str).unwrap_or("");
+            let Some(kind) = kind else {
+                return Err((400, "an item needs a kind: midi, spike, audio or merged".into()));
+            };
+            let live = g.rows.iter().any(|r| r.id == row);
+            if (kind == Kind::Merged) != row.is_empty() || (!row.is_empty() && !live && !has("any-row")) {
+                return Err((400, "unknown DAW track".into()));
+            }
+            out.push((row.to_string(), kind));
+        }
+        Ok(out)
+    }
+
+    /// The names that an export of `items` would write (see [`ExportName`]): `(row id, kind, file name, DAW track)` in the order of the items. A row with no hit has none.
+    ///
+    /// # Errors
+    ///
+    /// `(status, text)`: 400 for an item that is not a live row and a kind, 503 when the document is closed.
+    pub fn export_names(&self, items: &[Value]) -> Result<Vec<ExportName>, (u16, String)> {
+        let Some(g) = self.gather(false) else {
+            return Err((503, "the document is closed".into()));
+        };
+        let list = self.check_items(&g, items)?;
+        let fps = self.fps(&g);
+        Ok(list
+            .into_iter()
+            .filter(|k| fps.contains_key(k))
+            .filter_map(|k| {
+                let name = g.names.get(&k)?.clone();
+                let track = self.name_of(&g, &k.0);
+                Some((k.0, k.1, name, track))
+            })
+            .collect())
+    }
+
+    /// The export of the dialog in a DAW (M1c4, #589): the prepared files of `items`, copied to `dest` under their names. All or nothing: a set that is not
+    /// ready for the CURRENT hits answers 409 and nothing is written; `start` is the first call of one export (it starts the wav kinds). Every file is copied
+    /// to a temporary name first (the cancel is read until the first rename), then renamed over the old file of its name. A failed copy removes its
+    /// temporary files. `protected` are the files that no export may replace (`Service::protected_files_everywhere`).
+    ///
+    /// # Errors
+    ///
+    /// `(status, text)`: 400 for a bad item, 409 for a set not ready, a folder or protected file in the way, or a cancel, 500 for a failed copy (it names the DAW track).
+    pub fn export_to(
+        self: &Arc<Self>,
+        items: &[Value],
+        dest: &Path,
+        protected: &[PathBuf],
+        start: bool,
+    ) -> Result<Value, (u16, String)> {
+        use std::sync::atomic::Ordering::SeqCst;
+        let Some(g0) = self.gather(false) else {
+            return Err((503, "the document is closed".into()));
+        };
+        let list = self.check_items(&g0, items)?;
+        if start {
+            for kind in [Kind::Spike, Kind::Audio] {
+                if list.iter().any(|(_, k)| *k == kind) {
+                    self.want_kind(kind, None);
+                }
+            }
+        }
+        let Some(g) = self.gather(true) else {
+            return Err((503, "the document is closed".into()));
+        };
+        let Some(exports) = self.exports_dir() else {
+            return Err((409, "error: no export folder".into()));
+        };
+        let fps = self.fps(&g);
+        let picks = self.ready_files(&g, &fps, &list)?;
+        let prepared_dir = exports.join(PREPARED_DIR);
+        let dest_c = std::fs::canonicalize(dest).map_err(|e| (409, format!("{}: {e}", dest.display())))?;
+        for inside in [prepared_dir.clone(), exports.join(DRAGGED_DIR)] {
+            if std::fs::canonicalize(&inside).is_ok_and(|c| c == dest_c) {
+                return Err((409, "the folder of the prepared files is not an export folder".into()));
+            }
+        }
+        // the names: the producer's, one safe component each
+        let mut plan: Vec<(Key, PathBuf, PathBuf)> = Vec::new();
+        for (i, (key, src)) in picks.into_iter().enumerate() {
+            let mut name = src.file_name().and_then(|n| n.to_str()).unwrap_or("").to_string();
+            if has("trust-name") {
+                // the fault run: a name that the page sends is used as it is
+                if let Some(n) = items.get(i).and_then(|it| it["name"].as_str()) {
+                    name = n.to_string();
+                }
+            }
+            let ok =
+                !name.is_empty() && Path::new(&name).components().count() == 1 && !name.contains('/') && name != "..";
+            if !ok && !has("trust-name") {
+                return Err((400, "the file name is not allowed".into()));
+            }
+            plan.push((key, src, dest_c.join(&name)));
+        }
+        let outs: Vec<PathBuf> = plan.iter().map(|(_, _, o)| o.clone()).collect();
+        drumspike_app::export::check_export_plan(&outs, protected).map_err(|e| (409, e.message))?;
+        for (_, _, out) in &plan {
+            if std::fs::symlink_metadata(out).is_ok_and(|m| m.is_dir()) {
+                return Err((
+                    409,
+                    format!("{} is a folder: an export never replaces a folder", out.display()),
+                ));
+            }
+        }
+        let replaced = plan.iter().filter(|(_, _, o)| o.is_file() || o.is_symlink()).count();
+        self.exp.cancel.store(false, SeqCst);
+        self.exp.done.store(0, SeqCst);
+        self.exp.total.store(plan.len(), SeqCst);
+        self.exp.busy.store(true, SeqCst);
+        let _busy = BusyGuard(&self.exp.busy);
+        let mut tmps: Vec<PathBuf> = Vec::new();
+        let remove = |t: &[PathBuf]| t.iter().for_each(|p| drop(std::fs::remove_file(p)));
+        for (key, src, out) in &plan {
+            let track = self.name_of(&g, &key.0);
+            *self.exp.track.lock().unwrap_or_else(|e| e.into_inner()) = track.clone();
+            let name = out.file_name().and_then(|n| n.to_str()).unwrap_or("file");
+            let tmp = dest_c.join(format!(".{name}.tmp"));
+            tmps.push(tmp.clone());
+            if let Err(e) = copy_file(src, &tmp, &self.exp.cancel) {
+                remove(&tmps);
+                return Err(if e == "cancelled" {
+                    (409, "cancelled: nothing was written".into())
+                } else {
+                    (500, format!("{track}: could not copy the file: {e}"))
+                });
+            }
+            self.exp.done.fetch_add(1, SeqCst);
+        }
+        // the hits may have changed during the copy: a set that is not ready for the hits of now is not delivered
+        if !has("stale-ok") {
+            let g2 = self.gather(true);
+            let fresh = g2.as_ref().is_some_and(|g2| {
+                let f2 = self.fps(g2);
+                let st = self.lock();
+                list.iter().all(|k| {
+                    f2.get(k)
+                        .is_some_and(|w| st.ready.get(k).is_some_and(|r| r.fp == *w && r.fp == fps[k]))
+                })
+            });
+            if !fresh {
+                remove(&tmps);
+                self.wake();
+                return Err((409, "preparing: the hits changed during the export".into()));
+            }
+        }
+        if self.exp.cancel.load(SeqCst) {
+            remove(&tmps);
+            return Err((409, "cancelled: nothing was written".into()));
+        }
+        let mut files = Vec::new();
+        for (i, (key, _, out)) in plan.iter().enumerate() {
+            if let Err(e) = std::fs::rename(&tmps[i], out) {
+                remove(&tmps[i..]);
+                return Err((
+                    500,
+                    format!("{}: could not write the file: {e}", self.name_of(&g, &key.0)),
+                ));
+            }
+            files.push(out.clone());
+        }
+        let count = |k: Kind| plan.iter().filter(|(key, _, _)| key.1 == k).count();
+        let (mut no_region, mut before_start) = (0, 0);
+        for r in g
+            .rows
+            .iter()
+            .filter(|r| list.iter().any(|(id, _)| *id == r.id) || list.iter().any(|(_, k)| *k == Kind::Merged))
+        {
+            let (a, b) = left_out(r);
+            no_region += a;
+            before_start += b;
+        }
+        Ok(
+            json!({"files": files.iter().map(|f| f.display().to_string()).collect::<Vec<_>>(),
+                  "dest": dest_c.display().to_string(),
+                  "midi": count(Kind::Midi), "spikes": count(Kind::Spike), "audio": count(Kind::Audio),
+                  "merged": count(Kind::Merged), "replaced": replaced,
+                  "outside_song": {"no_region": no_region, "before_start": before_start}}),
+        )
+    }
+
+    /// The progress of the export of the dialog; `cancel` asks it to stop (it stops before the first rename).
+    #[must_use]
+    pub fn export_progress(&self, cancel: bool) -> Value {
+        use std::sync::atomic::Ordering::SeqCst;
+        if cancel {
+            self.exp.cancel.store(true, SeqCst);
+        }
+        json!({"busy": self.exp.busy.load(SeqCst), "done": self.exp.done.load(SeqCst), "total": self.exp.total.load(SeqCst),
+               "track": self.exp.track.lock().unwrap_or_else(|e| e.into_inner()).clone()})
     }
 
     fn name_of(&self, g: &Gathered, id: &str) -> String {
@@ -1246,6 +1478,53 @@ impl Prep {
         drop(st);
         self.push();
     }
+}
+
+struct BusyGuard<'a>(&'a std::sync::atomic::AtomicBool);
+
+impl Drop for BusyGuard<'_> {
+    fn drop(&mut self) {
+        self.0.store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// Copy `src` to `dst` in pieces of 1 MiB, looking at the cancel flag and the stop sign between them. A failed or cancelled copy leaves no `dst`.
+fn copy_file(src: &Path, dst: &Path, cancel: &std::sync::atomic::AtomicBool) -> Result<(), String> {
+    use std::io::{Read, Write};
+    let r = (|| -> Result<(), String> {
+        let mut a = std::fs::File::open(src).map_err(|e| format!("{}: {e}", src.display()))?;
+        let mut b = std::fs::File::create(dst).map_err(|e| format!("{}: {e}", dst.display()))?;
+        let mut buf = vec![0u8; 1 << 20];
+        loop {
+            if cancel.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err("cancelled".into());
+            }
+            checkpoint()?;
+            let n = a.read(&mut buf).map_err(|e| e.to_string())?;
+            if n == 0 {
+                break;
+            }
+            b.write_all(&buf[..n]).map_err(|e| e.to_string())?;
+        }
+        b.sync_all().map_err(|e| e.to_string())
+    })();
+    if r.is_err() {
+        let _ = std::fs::remove_file(dst);
+    }
+    r
+}
+
+/// The hits of the row that the song map leaves out: (in no clip, before song 0). The same `to_song` as the files.
+#[must_use]
+pub fn left_out(row: &RowIn) -> (usize, usize) {
+    row.srcs.iter().fold((0, 0), |(a, b), s| {
+        let regions = regions_of(row, &s.key);
+        if regions.is_empty() {
+            return (a, b);
+        }
+        let c = to_song(&s.events, &regions).1;
+        (a + c.no_region, b + c.before_start)
+    })
 }
 
 /// True when a new file of `size` bytes would take `.prepared/` (holding `others` bytes besides the file it replaces) over [`CAP_BYTES`].
@@ -2003,6 +2282,313 @@ mod tests {
             Arc::new(|| crate::tempo_ara::choose(None, "test", None)),
             Arc::new(move || wavs.clone()),
         )
+    }
+
+    fn it(row: &str, kind: &str) -> Value {
+        json!({"row": row, "kind": kind})
+    }
+
+    /// M1c4 (#589): the export of the dialog copies the prepared files, byte for byte what a take delivers, under the same names; it replaces a file of the
+    /// same name, never a folder or a protected file, writes nothing for a stale set and leaves no temporary file.
+    #[test]
+    fn the_export_of_the_dialog_copies_the_prepared_files_and_never_a_stale_set_a_folder_or_a_protected_file() {
+        let (svc, sid, root) = two_tracks("export");
+        svc.events_set(&sid, "lead", &json!([{"t": 0.25, "v": 100}, {"t": 1.25, "v": 100}]))
+            .unwrap();
+        svc.events_set(&sid, "sub", &json!([{"t": 0.5, "v": 100}])).unwrap();
+        let prep = prep_of(&svc, &sid, &root);
+        prep.cycle(true, true);
+        let dest = root.join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        let items = [it("q-lead", "midi"), it("q-sub", "midi")];
+        // a file of the same name is replaced, and the count says so; the plan names the files
+        std::fs::write(dest.join("lead_spike.mid"), b"OLD").unwrap();
+        let names = prep.export_names(&items).unwrap();
+        assert_eq!(
+            names.iter().map(|n| n.2.as_str()).collect::<Vec<_>>(),
+            ["lead_spike.mid", "sub_spike.mid"]
+        );
+        let got = prep.export_to(&items, &dest, &[], true).unwrap();
+        assert_eq!((got["midi"].as_u64(), got["replaced"].as_u64()), (Some(2), Some(1)));
+        let taken = prep
+            .take(&[("q-lead".to_string(), Kind::Midi), ("q-sub".to_string(), Kind::Midi)])
+            .unwrap();
+        for (n, t) in ["lead_spike.mid", "sub_spike.mid"].iter().zip(&taken) {
+            assert_eq!(
+                std::fs::read(dest.join(n)).unwrap(),
+                std::fs::read(t).unwrap(),
+                "{n}: the bytes of the handle"
+            );
+        }
+        assert!(
+            std::fs::read_dir(&dest)
+                .unwrap()
+                .flatten()
+                .all(|e| !e.file_name().to_string_lossy().ends_with(".tmp")),
+            "no temporary file is left"
+        );
+        // a wav kind that was never used: the first call starts it and the answer is 409 (the page asks again); nothing is written
+        let wav = [it("q-lead", "spike")];
+        let e = prep.export_to(&wav, &dest, &[], true).unwrap_err();
+        assert_eq!(e.0, 409, "{e:?}");
+        assert!(!dest.join("lead_spike.wav").exists());
+        prep.cycle(true, true);
+        prep.export_to(&wav, &dest, &[], false).unwrap();
+        assert!(dest.join("lead_spike.wav").is_file());
+        // a stale set: the hits changed, the pass has not run: 409 and the old file in the folder is not touched
+        svc.events_set(&sid, "lead", &json!([{"t": 0.25, "v": 100}, {"t": 2.25, "v": 100}]))
+            .unwrap();
+        let before = std::fs::read(dest.join("lead_spike.mid")).unwrap();
+        let e = prep.export_to(&items, &dest, &[], false).unwrap_err();
+        assert_eq!(e.0, 409, "{e:?}");
+        assert_eq!(std::fs::read(dest.join("lead_spike.mid")).unwrap(), before);
+        prep.cycle(true, true);
+        prep.export_to(&items, &dest, &[], false).unwrap();
+        assert_ne!(
+            std::fs::read(dest.join("lead_spike.mid")).unwrap(),
+            before,
+            "the new hit is in the file"
+        );
+        // a folder with the name of a file is never replaced; a protected file is never replaced; the prepared folder is no destination
+        let dir_dest = root.join("out2");
+        std::fs::create_dir_all(dir_dest.join("sub_spike.mid")).unwrap();
+        assert_eq!(prep.export_to(&items, &dir_dest, &[], false).unwrap_err().0, 409);
+        assert!(
+            dir_dest.join("sub_spike.mid").is_dir() && !dir_dest.join("lead_spike.mid").exists(),
+            "all or nothing"
+        );
+        let guarded = dest.join("lead_spike.mid");
+        assert_eq!(prep.export_to(&items, &dest, &[guarded], false).unwrap_err().0, 409);
+        let exports = prep.exports_dir().unwrap();
+        assert_eq!(
+            prep.export_to(&items, &exports.join(PREPARED_DIR), &[], false)
+                .unwrap_err()
+                .0,
+            409
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// M1c4 (R10): the page names a row id and a kind and nothing else; an id that is not a live row, a name or a path in an item, a bad kind: 400, nothing written.
+    #[test]
+    fn a_forged_row_id_or_name_in_an_item_is_refused_and_nothing_is_written() {
+        let (svc, sid, root) = two_tracks("forged");
+        svc.events_set(&sid, "lead", &json!([{"t": 0.25, "v": 100}])).unwrap();
+        let prep = prep_of(&svc, &sid, &root);
+        prep.cycle(true, true);
+        let dest = root.join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        for bad in [
+            it("../etc", "midi"),
+            it("q-nothing", "midi"),
+            it("", "midi"),
+            it("q-lead", "merged"),
+            it("q-lead", "exe"),
+            json!({"row": "q-lead", "kind": "midi", "name": "../escape.mid"}),
+            json!({"row": "q-lead", "kind": "midi", "path": "/tmp/x"}),
+            json!("q-lead"),
+        ] {
+            assert_eq!(
+                prep.export_to(std::slice::from_ref(&bad), &dest, &[], false)
+                    .unwrap_err()
+                    .0,
+                400,
+                "{bad}"
+            );
+            assert_eq!(
+                prep.export_names(std::slice::from_ref(&bad)).unwrap_err().0,
+                400,
+                "{bad}"
+            );
+        }
+        assert!(prep.export_to(&[], &dest, &[], false).is_err());
+        assert_eq!(std::fs::read_dir(&dest).unwrap().count(), 0);
+        assert!(!root.join("escape.mid").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// M1c4 (R8): a cancelled or failed copy leaves no file, not even a temporary one; the hits that the song map leaves out are counted.
+    #[test]
+    fn a_cancelled_copy_leaves_no_file_and_the_hits_left_out_are_counted() {
+        let d = std::env::temp_dir().join(format!("ds-prep-copy-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("a.bin"), vec![7u8; 3 << 20]).unwrap();
+        let flag = std::sync::atomic::AtomicBool::new(false);
+        copy_file(&d.join("a.bin"), &d.join("b.bin"), &flag).unwrap();
+        assert_eq!(std::fs::read(d.join("b.bin")).unwrap().len(), 3 << 20);
+        flag.store(true, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(
+            copy_file(&d.join("a.bin"), &d.join("c.bin"), &flag).unwrap_err(),
+            "cancelled"
+        );
+        assert!(!d.join("c.bin").exists());
+        assert!(copy_file(&d.join("missing"), &d.join("e.bin"), &flag).is_err() && !d.join("e.bin").exists());
+        let r = row(
+            "r1",
+            "Row",
+            vec![clip("a", 1.0, 2.0, 0.0, 1.0)],
+            vec![src("a", &[0.5, 1.5, 1.6, 2.5], 48_000)],
+        );
+        assert_eq!(left_out(&r), (2, 0), "two hits outside the clip");
+        let _ = std::fs::remove_dir_all(&d);
+    }
+
+    /// A document with `n` tracks `t0`..`t{n-1}` that all read ONE audio file of `secs` seconds (float 32, mono, 48 kHz), each with `hits` hits.
+    fn many_tracks(tag: &str, n: usize, secs: f64, hits: usize) -> (drumspike_app::Service, String, PathBuf) {
+        use drumspike_app::{Service, ServiceConfig};
+        use drumspike_core::io::{encode_wav, WavFormat, WavSpec};
+        use drumspike_core::project::{add_track, build_source, new_project, save_project};
+        let root = std::env::temp_dir().join(format!("ds-prep-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let sr = 48_000u32;
+        let mut p = new_project(&root, "Many").unwrap();
+        let wav = root.join("daw").join("all.wav");
+        std::fs::create_dir_all(wav.parent().unwrap()).unwrap();
+        let spec = WavSpec {
+            sample_rate: sr,
+            channels: 1,
+            format: WavFormat::Float32,
+            extensible: false,
+            channel_mask: 0,
+        };
+        let x = vec![0.1f32; (secs * f64::from(sr)) as usize];
+        std::fs::write(&wav, encode_wav(&spec, &x, None)).unwrap();
+        for k in 0..n {
+            let rec = build_source(&wav, &p.dir, "referenced").unwrap();
+            let tr = add_track(&mut p, &format!("t{k}"), Some(rec), "kick", 36, Some("average")).unwrap();
+            tr.sr = Some(i64::from(sr));
+            tr.n_samples = Some(x.len() as i64);
+            tr.duration = Some(secs);
+            tr.color = Some("#e05555".into());
+        }
+        save_project(&mut p).unwrap();
+        let svc = Service::new(ServiceConfig::default());
+        svc.set_home(root.join("home"));
+        let sid = svc.project_open(&p.dir.display().to_string()).unwrap()["sid"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        for k in 0..n {
+            let ev: Vec<Value> = (0..hits)
+                .map(|i| json!({"t": 0.1 + (secs - 0.3) * i as f64 / hits as f64, "v": 100}))
+                .collect();
+            svc.events_set(&sid, &format!("t{k}"), &json!(ev)).unwrap();
+        }
+        (svc, sid, root)
+    }
+
+    fn prep_many(svc: &drumspike_app::Service, sid: &str, root: &Path, n: usize, secs: f64) -> Arc<Prep> {
+        let page = Arc::new(PageHandle::default());
+        page.set(Some(svc.clone()));
+        page.set_sid(Some(sid.to_string()));
+        let rows = Rows {
+            rows: (0..n)
+                .map(|k| crate::rows::Row {
+                    id: format!("q{k}"),
+                    name: format!("t{k}"),
+                    srcs: vec![format!("t{k}")],
+                    clips: vec![clip(&format!("t{k}"), 0.0, secs, 0.0, 1.0)],
+                })
+                .collect(),
+            ..Rows::default()
+        };
+        let wav = root.join("daw").join("all.wav");
+        let wavs: HashMap<String, (PathBuf, u32)> = (0..n).map(|k| (format!("t{k}"), (wav.clone(), 48_000))).collect();
+        Prep::new(
+            page,
+            Arc::new(move || rows.clone()),
+            Arc::new(|| crate::tempo_ara::choose(None, "test", None)),
+            Arc::new(move || wavs.clone()),
+        )
+    }
+
+    fn cpu_ms() -> u128 {
+        // the CPU time of this process, from `ps` (10 ms resolution)
+        let out = std::process::Command::new("/bin/ps")
+            .args(["-o", "cputime=", "-p", &std::process::id().to_string()])
+            .output()
+            .unwrap();
+        let t = String::from_utf8_lossy(&out.stdout).trim().to_string();
+        let (m, rest) = t.split_once(':').unwrap_or(("0", "0"));
+        let secs: f64 = rest.parse().unwrap_or(0.0);
+        (m.parse::<f64>().unwrap_or(0.0) * 60_000.0 + secs * 1000.0) as u128
+    }
+
+    /// M1c4 (#589), the two measures of the ticket. Run: `cargo test -p drumspike-ara --lib measure_ -- --ignored --nocapture` (about 3 GB of scratch
+    /// disk for the first one). It prints the numbers; the check does not run it (the times depend on the machine).
+    #[test]
+    #[ignore = "a measure: prints numbers, writes about 3 GB"]
+    fn measure_the_spike_files_of_a_ten_minute_song_with_twelve_tracks() {
+        let (n, secs) = (12usize, 600.0f64);
+        let (svc, sid, root) = many_tracks("measure12", n, secs, 700);
+        let prep = prep_many(&svc, &sid, &root, n, secs);
+        let t = Instant::now();
+        prep.cycle(true, true);
+        let midi_ms = t.elapsed().as_millis();
+        prep.lock().used = [true, false];
+        let t = Instant::now();
+        prep.cycle(true, true);
+        let spike_ms = t.elapsed().as_millis();
+        let exports = prep.exports_dir().unwrap();
+        let bytes: u64 = std::fs::read_dir(exports.join(PREPARED_DIR))
+            .unwrap()
+            .flatten()
+            .filter(|e| e.path().extension().is_some_and(|x| x == "wav"))
+            .filter_map(|e| e.metadata().ok())
+            .map(|m| m.len())
+            .sum();
+        let dest = root.join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        let mut items: Vec<Value> = (0..n).map(|k| it(&format!("q{k}"), "midi")).collect();
+        items.extend((0..n).map(|k| it(&format!("q{k}"), "spike")));
+        let t = Instant::now();
+        let got = prep.export_to(&items, &dest, &[], false).unwrap();
+        let copy_ms = t.elapsed().as_millis();
+        println!(
+            "MEASURE ten minutes, 12 tracks, 700 hits each: MIDI sets (12 + merged) {midi_ms} ms; spike sets (12) {spike_ms} ms ({} MB written, {} ms for each file on average); \
+             the dialog's copy of {} files into a folder {copy_ms} ms",
+            bytes / 1_000_000,
+            spike_ms / n as u128,
+            got["files"].as_array().map_or(0, Vec::len)
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    #[ignore = "a measure: prints numbers"]
+    fn measure_the_idle_look_with_forty_rows() {
+        let (n, secs) = (40usize, 60.0f64);
+        let (svc, sid, root) = many_tracks("measure40", n, secs, 300);
+        let prep = prep_many(&svc, &sid, &root, n, secs);
+        prep.cycle(true, true);
+        let reps = 20u32;
+        let t = Instant::now();
+        for _ in 0..reps {
+            let g = prep.gather(true).unwrap();
+            let _ = prep.fps(&g);
+        }
+        let look = t.elapsed().as_secs_f64() * 1000.0 / f64::from(reps);
+        let t = Instant::now();
+        for _ in 0..reps {
+            let _ = prep.state_json();
+        }
+        let state = t.elapsed().as_secs_f64() * 1000.0 / f64::from(reps);
+        let payload = prep.state_json().to_string().len();
+        // the worker with nothing to do: CPU time and passes over 5 s
+        prep.wake();
+        std::thread::sleep(Duration::from_millis(1500));
+        let (c0, _) = prep.counters();
+        let cpu0 = cpu_ms();
+        std::thread::sleep(Duration::from_secs(5));
+        let (c1, _) = prep.counters();
+        println!(
+            "MEASURE idle look, 40 rows, 300 hits each: one look (gather with the follower refresh, then the fingerprints) {look:.2} ms; state_json {state:.2} ms, payload {payload} bytes; \
+             over 5 s with no change: {} passes, {} ms CPU of this process",
+            c1 - c0,
+            cpu_ms() - cpu0
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]

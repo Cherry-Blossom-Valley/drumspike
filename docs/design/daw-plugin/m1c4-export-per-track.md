@@ -28,7 +28,7 @@ After, in a DAW only (`hostMode()`):
   `<DAW track>_spike.wav`, `<DAW track>_audio_spike.wav`, and for the single file mode `Drums_merged.mid`.
 - The replace count counts those names in the destination folder.
 - The two tiles hold the prepared sets of the chosen rows and drag them with `plugin_deliver_take`, like the handles
-  (decision 7, a question for the coordinator).
+  (ruling R6, section 7).
 - The standalone page and the app commands (`export_all`, `export_existing`, `export_drag_*`) are not touched.
 
 ## 2. One producer: the dialog copies the prepared set
@@ -87,11 +87,11 @@ Rule: Export never copies a set that is not ready for the CURRENT hits, and neve
 - The page calls `plugin_deliver_export`. The plugin first asks for the wav kinds that the options need
   (`want_kind`, so `off` becomes `preparing`) and for a wake of the worker, then looks at the states.
 - All items ready: copy, answer 200.
-- Something is `preparing` or `off`: answer 409 with `{pending: n, total: m, states}`. The page shows the progress
+- Something is `preparing` or `off`: answer 409 with the DAW track and its state (`Kick: preparing`). The page shows the progress
   `Preparing n/m` (the progress bar of the export, `showProgress`) and asks again every 300 ms. The plugin call itself
   is short, no request thread waits. The wait ends at once on an `error` state.
 - Limit: the existing 30 s of the dialog (`EX.waitMs`, `exWait`) counted from the press. On the limit the dialog says
-  `export failed: the preparation of <DAW track>, <kind> did not end (30 s)`; nothing was copied that is not ready.
+  `export failed: <DAW track> is not ready after 30 s: nothing was written`; nothing was copied that is not ready.
   Files of the ready items are NOT copied in this case: all or nothing, so a folder never gets a part of a set
   without the user knowing (the toolbar handles do the same, m1c3 section 7).
 - An `error` state (a failed job, the 30 s watchdog of the worker, `no export folder`, a row that is not done, M1d4):
@@ -115,9 +115,8 @@ Rule: Export never copies a set that is not ready for the CURRENT hits, and neve
   names the folder and shows the count.
 - Never replaced: a directory with the name, and a file that is protected (the audio files of the document, the
   document's own files). The plan checks the output names against the protected list before it copies anything;
-  the service has `check_export_plan` for it, and it is `pub(crate)`. If it cannot be called from the plugin without a
-  change in `crates/app`, the plugin checks the same two things itself (a directory, a path equal to a protected file) and
-  this is reported. The writes never leave `dest`: the name is one safe component (the producer's rule), the temporary
+  `drumspike_app::export::check_export_plan` with `Service::protected_files_everywhere` does it (both made `pub`, ruling R5; no copy of the rule in the plugin).
+  The writes never leave `dest`: the name is one safe component (the producer's rule), the temporary
   file is `<name>.tmp` in `dest`.
 - Two files of one export with equal names without case cannot occur (`final_names`).
 - The folder: the default folder `Exports/` of the document, or a folder chosen in the sheet (this session or remembered
@@ -148,21 +147,32 @@ Every change is behind `hostMode()`. The standalone page has no new element, not
 - The stretch line and the tempo line use source names today; in a DAW they use the rows that hold those sources.
 - Keyboard: Enter exports as before. The dialog adds no new focusable element.
 
-## 7. Decisions that need a ruling
+## 7. Rulings of the coordinator (the decisions of this note, as built)
 
-1. Single file in a DAW is the merged MIDI file (one note track), not the type 1 file with a MIDI track per drum. Reason:
-   the same file as the toolbar handle, so "same names, same bytes" holds, and the writer exists (`merged_midi_bytes`).
-   The type 1 file per drum has no producer function; adding one is a second MIDI path. Alternative: hide the single mode in a DAW.
-2. Single mode with scope "Selected track": disabled (section 3). Alternative: a merged file of the chosen rows only
-   (needs a change of `write_merged` and the `fp` of the merged set).
-3. Replace on a name clash in the destination (section 5), not numbering. Alternative: number as the take does.
-4. All or nothing while sets prepare (section 4), with the 30 s limit. Alternative: copy the ready ones and report the rest.
-5. A copy of the prepared files, not a second render into the folder (section 2).
-6. `check_export_plan` is `pub(crate)`. If the plugin cannot call it, it checks "a directory, or a protected file" itself. A
-   visibility change to `pub` would be the only change in `crates/app` (one word). Which do you want?
-7. The tiles use the prepared sets (section 1). Alternative: leave the tiles on `export_drag_prepare` in this ticket; then in a DAW the tiles
-   still make per-source files and the dialog would disagree with itself for a two-file row.
-8. "Also updated: older spike files of the other type in this folder" (#274) is not done in a DAW (the names are the producer's).
+1. R1: the single file mode in a DAW is the merged MIDI file, `Drums_merged.mid`. The label in a DAW is "One MIDI track with all drums (one file)" and
+   its tooltip says what it is. No text promises one track per drum.
+2. R2: the single mode with the scope "Selected track" is disabled, with the reason as the tooltip of its row ("needs All tracks").
+3. R3: a name that exists in the destination is replaced; the dialog shows the count before the export. A folder with that name and a protected file are
+   never replaced. Every file is written to a temporary name in the destination and renamed.
+4. R4: all or nothing. A set that is not ready for the hits of now is never copied; the dialog waits (progress, 30 s) and on the limit says which
+   DAW track is not ready ("<track> is not ready after 30 s: nothing was written"). The copy checks the state again before the first rename: when the hits
+   changed during the copy it removes its temporary files and waits for the new set.
+5. R5: `check_export_plan` and `Service::protected_files_everywhere` in `crates/app/src/export.rs` are `pub` (two words, no logic change). The plugin calls
+   them; it has no copy of the rule. This is the only change in `crates/`.
+6. R6: the two tiles of the dialog show the prepared sets of the chosen DAW tracks and drag with `plugin_deliver_take`, like the handles. The dialog
+   renders nothing, uses no `export_drag_prepare`, and has no 400 ms timer in a DAW.
+7. R7: "Also updated: older spike files of the other type in this folder" (#274) is not done in a DAW: the names are the producer's, one set per DAW track.
+8. R8: the copy runs on the request thread of the command (never the main thread, never the audio thread), in pieces of 1 MiB. The dialog shows
+   `Exporting n/m` from `plugin_deliver_progress`. Cancel (the dialog's Cancel button while it runs) sets a flag that the copy reads between pieces and
+   before the first rename. A failed or cancelled copy removes its temporary file; a failed copy names the DAW track. When a rename fails, the
+   files renamed before it are complete files and the rest is removed.
+9. R9: the dialog text names DAW tracks only; the page test of the words and the stage check that no text says "source".
+10. R10: `plugin_deliver_plan` and `plugin_deliver_export` take only `{row, kind}` items from the page (a row id is a live row or "" for the merged
+    file; any other key in an item, a name or a path, is 400), a `dest` that the rule of #579 allows (the commands are in `dest_allowed_in`), and a `start` flag.
+    The file name is the producer's and is checked to be one component. The prepared and delivered folders are not destinations. Fault runs of the stage:
+    `any-row` (a row id that is no live row), `trust-name` (a name from the page), `any-dest`, `prefix-dest`.
+11. R11: the standalone dialog is not touched: a page test with the plugin mode off checks that it lists audio tracks and calls `export_all`,
+    `export_existing` and `export_drag_prepare`.
 
 ## 8. Gate plan and measures
 

@@ -335,6 +335,11 @@ function shellMethods(invoke, T) {
        The test bridge has no host: none. */
     deliverState: () => (bridge() ? Promise.resolve(null) : invoke("plugin_deliver_state", {})),
     deliverTake: items => invoke("plugin_deliver_take", { items }),
+    /* #589: the export dialog in a DAW: the names and the replace count of the items, the copy of the prepared files into the folder (409 "preparing": ask again),
+       the progress and the cancel of a running copy. Items are {row, kind} with kind midi, spike, audio or merged (row ""). */
+    deliverPlan: (items, dest) => invoke("plugin_deliver_plan", dest ? { items, dest } : { items }),
+    deliverExport: (items, dest, start) => invoke("plugin_deliver_export", { items, ...(dest ? { dest } : {}), start: !!start }),
+    deliverProgress: cancel => invoke("plugin_deliver_progress", cancel ? { cancel: true } : {}),
     deliverWant: (kind, row) => invoke("plugin_deliver_want", row ? { kind, row } : { kind }),
     hostStates: () => invoke("plugin_host_states"),   // #578: the states of the first open (the plugin only)
     hostRetry: rows => invoke("plugin_host_retry", { rows }),

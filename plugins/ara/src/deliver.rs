@@ -243,7 +243,10 @@ pub fn dest_allowed_in(chosen: &[PathBuf], default: Option<&Path>, cmd: &str, ar
     if crate::editor::fault() == "any-dest" {
         return true;
     }
-    if !matches!(cmd, "export_all" | "export_existing" | "export_dest_set") {
+    if !matches!(
+        cmd,
+        "export_all" | "export_existing" | "export_dest_set" | "plugin_deliver_plan" | "plugin_deliver_export"
+    ) {
         return false;
     }
     if args.get("path").and_then(Value::as_str).is_some_and(|s| !s.is_empty()) {
