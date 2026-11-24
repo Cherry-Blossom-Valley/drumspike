@@ -277,6 +277,14 @@ fn set_fail(s: &SourceState, k: firstopen::Fail) {
     }
 }
 
+/// M1d4: a round analysed the source: the failure, a press of Retry and the analysis clock are over (S3: the next re-analysis starts its clock again at its round).
+fn clear_after_success(s: &SourceState) {
+    *s.life.fail.lock().unwrap_or_else(|e| e.into_inner()) = None;
+    s.life.retry_at.store(0, Ordering::SeqCst);
+    s.life.ready_at.store(0, Ordering::SeqCst);
+    s.life.retry_only.store(false, Ordering::SeqCst);
+}
+
 /// M1d4: the audio is coming or here: an old failure of the read is over (a late arrival brings the real state back).
 fn clear_read_fail(s: &SourceState) {
     let mut f = s.life.fail.lock().unwrap_or_else(|e| e.into_inner());
@@ -295,6 +303,8 @@ impl RoundFlag {
     fn set(list: Vec<Arc<SourceState>>) -> RoundFlag {
         for s in &list {
             s.life.in_round.store(true, Ordering::SeqCst);
+            // S3: the analysis clock of a source starts when its round starts (the wait for a job of the page does not count)
+            s.life.ready_at.store(now1(), Ordering::SeqCst);
         }
         if let Some(s) = list.first() {
             s.doc.states_changed();
@@ -1245,6 +1255,10 @@ impl DocShared {
 
     /// M1d4 (#578): the facts of every live source, each with the source. A source that has no track yet is in the list.
     fn state_facts(&self) -> Vec<(firstopen::SrcFact, Arc<SourceState>)> {
+        self.state_facts_at(now1())
+    }
+
+    fn state_facts_at(&self, now: u64) -> Vec<(firstopen::SrcFact, Arc<SourceState>)> {
         let seqs = self.sequences.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let members: Vec<Arc<SourceState>> = self
             .members
@@ -1284,22 +1298,30 @@ impl DocShared {
             })
             .collect();
         let shown = names::display_names(&views, names::Fault::read());
-        let now = now1();
         let auto = self.auto_retry.load(Ordering::SeqCst) > now;
         let mut out = Vec::new();
         for s in live {
-            let first: Option<RegionSlot> = s.regions.lock().ok().and_then(|r| {
-                r.iter()
-                    .min_by(|a, b| a.rec.start_play.total_cmp(&b.rec.start_play).then(a.id.cmp(&b.id)))
-                    .cloned()
-            });
-            let (row, order) = match &first {
-                Some(r) if r.sequence != 0 => (
-                    format!("q{}", r.sequence),
-                    seqs.get(&r.sequence).and_then(|q| q.order).unwrap_or(i32::MAX),
-                ),
-                _ => (format!("s{}", s.seq), i32::MAX),
-            };
+            // S5: a source is in the row of EVERY region sequence it has a clip on (the rows of song time do the same), the first by
+            // song position first; a source with no clip, or with clips of no sequence, is in its own row `s<index>`
+            let mut slots: Vec<RegionSlot> = s.regions.lock().map(|r| r.clone()).unwrap_or_default();
+            slots.sort_by(|a, b| a.rec.start_play.total_cmp(&b.rec.start_play).then(a.id.cmp(&b.id)));
+            let mut row_list: Vec<(String, i32, Option<String>)> = Vec::new();
+            for r in &slots {
+                let (id, order) = if r.sequence != 0 {
+                    (
+                        format!("q{}", r.sequence),
+                        seqs.get(&r.sequence).and_then(|q| q.order).unwrap_or(i32::MAX),
+                    )
+                } else {
+                    (format!("s{}", s.seq), i32::MAX)
+                };
+                if !row_list.iter().any(|(x, _, _)| *x == id) {
+                    row_list.push((id, order, seqs.get(&r.sequence).and_then(|q| q.name.clone())));
+                }
+            }
+            if row_list.is_empty() {
+                row_list.push((format!("s{}", s.seq), i32::MAX, None));
+            }
             let p = s.props();
             let wav = has_wav(s);
             let reading = !wav && reader_running(s);
@@ -1311,13 +1333,14 @@ impl DocShared {
                 .get(&format!("#{}", s.seq))
                 .cloned()
                 .unwrap_or_else(|| p.name.clone());
-            out.push((
+            let base = (
                 firstopen::SrcFact {
                     key: s.track.lock().ok().and_then(|t| t.clone()),
                     name,
                     machine: p.name.clone(),
-                    row,
-                    order: (order, s.seq),
+                    row: String::new(),
+                    dup: false,
+                    order: (i32::MAX, s.seq),
                     hits: s.notes.lock().map(|n| n.len()).unwrap_or(0),
                     done: s.has_events.load(Ordering::SeqCst)
                         && !s.analysis_failed.load(Ordering::SeqCst)
@@ -1339,7 +1362,19 @@ impl DocShared {
                     retry_ms: (retry_at != 0).then(|| since(retry_at)),
                 },
                 s.clone(),
-            ));
+            );
+            for (n, (id, order, seq_name)) in row_list.into_iter().enumerate() {
+                let mut f = base.0.clone();
+                f.row = id;
+                f.order = (order, s.seq);
+                f.dup = n > 0; // the hits of the source count once in the document
+                if n > 0 {
+                    if let Some(sn) = seq_name.filter(|x| !x.trim().is_empty()) {
+                        f.name = sn;
+                    }
+                }
+                out.push((f, base.1.clone()));
+            }
         }
         out
     }
@@ -1384,7 +1419,16 @@ impl DocShared {
 
     /// M1d4: the rows that are not done, `(id, in progress)`; the handles of such a row are never ready.
     fn rows_not_done(&self) -> Vec<(String, bool)> {
+        self.rows_not_done_with(false)
+    }
+
+    /// S6: a panic in the state path fails closed: the entry `*` makes every row count as preparing, so no handle is ready
+    /// on a state that nobody could read (`boom` is the unit test's panic).
+    fn rows_not_done_with(&self, boom: bool) -> Vec<(String, bool)> {
         std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            if boom {
+                panic!("test: the state path panics");
+            }
             self.states_value()
                 .rows
                 .iter()
@@ -1392,7 +1436,7 @@ impl DocShared {
                 .map(|r| (r.id.clone(), !r.retry()))
                 .collect()
         }))
-        .unwrap_or_default()
+        .unwrap_or_else(|_| vec![("*".to_string(), true)])
     }
 
     /// M1d4: a fact of a source changed: when the states differ from what the page was told last, the page gets them as the
@@ -1439,9 +1483,21 @@ impl DocShared {
     /// edits and settings of the other tracks are not touched. A source that still has a job (a read, a round, an earlier
     /// press) is refused, so a second press never starts a second job. Retry changes no project data of the user.
     fn retry_rows(self: &Arc<Self>, ids: &[String]) -> Value {
-        let facts = self.state_facts();
+        self.retry_rows_at(ids, now1())
+    }
+
+    /// `retry_rows` at the time `now` (`now1()` clock; the unit test moves it past the wait limit).
+    fn retry_rows_at(self: &Arc<Self>, ids: &[String], now: u64) -> Value {
+        let facts = self.state_facts_at(now);
         let lim = firstopen::Limits::read();
         let all = crate::test_switch("DS_ARA_FIRSTOPEN_FAULT").as_deref() == Ok("retry-all-tracks");
+        // M1: a press that is older than the wait limit is over (a row that never gets audio would refuse every later press);
+        // the fault run `retry-dead-end` brings the dead end back
+        let dead_end = crate::test_switch("DS_ARA_FIRSTOPEN_FAULT").as_deref() == Ok("retry-dead-end");
+        let live_press = |s: &SourceState| {
+            let at = s.life.retry_at.load(Ordering::SeqCst);
+            at != 0 && (dead_end || now.saturating_sub(at) <= lim.wait_ms)
+        };
         let rows = firstopen::build(
             &facts.iter().map(|(f, _)| f.clone()).collect::<Vec<_>>(),
             &lim,
@@ -1466,11 +1522,9 @@ impl DocShared {
             }
             let mine: Vec<&(firstopen::SrcFact, Arc<SourceState>)> =
                 facts.iter().filter(|(f, _)| f.row == *id).collect();
-            let busy = mine.iter().any(|(_, s)| {
-                s.life.in_round.load(Ordering::SeqCst)
-                    || reader_running(s)
-                    || (s.life.retry_at.load(Ordering::SeqCst) != 0 && !all)
-            });
+            let busy = mine
+                .iter()
+                .any(|(_, s)| s.life.in_round.load(Ordering::SeqCst) || reader_running(s) || (live_press(s) && !all));
             if busy && !all {
                 refused.push(json!({"id": id, "reason": "The plugin is still working on this track."}));
                 continue;
@@ -1485,14 +1539,17 @@ impl DocShared {
                     continue;
                 }
                 // one press starts one job: the mark is taken with a compare and exchange
-                if s.life
-                    .retry_at
-                    .compare_exchange(0, now1(), Ordering::SeqCst, Ordering::SeqCst)
-                    .is_err()
+                let seen = s.life.retry_at.load(Ordering::SeqCst);
+                if (live_press(s)
+                    || s.life
+                        .retry_at
+                        .compare_exchange(seen, now, Ordering::SeqCst, Ordering::SeqCst)
+                        .is_err())
                     && !all
                 {
                     continue;
                 }
+                s.life.retry_at.store(now, Ordering::SeqCst);
                 *s.life.fail.lock().unwrap_or_else(|e| e.into_inner()) = None;
                 s.read_tries.store(0, Ordering::SeqCst);
                 any = true;
@@ -2652,6 +2709,7 @@ impl Session {
                 let always = crate::test_switch("DS_ARA_ROUND_FAULT").as_deref() == Ok("always");
                 if s.removed.load(Ordering::SeqCst) || (!needs_analysis(&s) && !always) {
                     s.life.retry_at.store(0, Ordering::SeqCst); // M1d4: nothing to do: a press of Retry is over
+                    s.life.retry_only.store(false, Ordering::SeqCst); // S4
                     s.doc.states_changed();
                     return false; // a source that is complete: nothing changed, no round
                 }
@@ -3075,8 +3133,11 @@ impl Session {
                     s.has_events.store(true, Ordering::SeqCst);
                     s.analysis_failed.store(false, Ordering::SeqCst);
                     s.stale.store(false, Ordering::SeqCst);
-                    *s.life.fail.lock().unwrap_or_else(|e| e.into_inner()) = None; // M1d4
+                    clear_after_success(s); // M1d4
+                } else {
+                    // M1: the round ended on the OLD audio: a press of Retry is over (the new read follows or has failed)
                     s.life.retry_at.store(0, Ordering::SeqCst);
+                    s.life.retry_only.store(false, Ordering::SeqCst);
                 }
                 if fresh
                     && s.reanalyse.load(Ordering::SeqCst)
@@ -4446,6 +4507,7 @@ unsafe extern "C" fn dc_destroyAudioSource(c: ARADocumentControllerRef, audioSou
             return;
         }
         src.0.removed.store(true, Ordering::SeqCst);
+        src.0.life.retry_only.store(false, Ordering::SeqCst); // S4
         src.0.doc.region_gen.fetch_add(1, Ordering::SeqCst);
         // the source leaves the controller's list now; its track leaves the project on the
         // worker thread (the service does disk work, never the host's main thread)
@@ -6704,6 +6766,119 @@ mod tests {
             r["text"].as_str().unwrap().ends_with("The hits shown are from before."),
             "{r}"
         );
+    }
+
+    #[test]
+    fn a_row_that_never_gets_audio_can_be_retried_again_after_the_wait_limit() {
+        // M1: offline -> Retry -> asking -> offline -> Retry again: the press is over after the wait limit, two fast presses are still one job
+        let (doc, _a, b) = first_open_doc();
+        b.access.store(true, Ordering::SeqCst);
+        set_fail(&b, firstopen::Fail::Late);
+        let first = doc.retry_rows(&["q8".to_string()]);
+        assert_eq!(first["started"], json!(["q8"]), "{first}");
+        let fast = doc.retry_rows(&["q8".to_string()]);
+        assert_eq!(fast["started"], json!([]), "a fast second press starts nothing: {fast}");
+        // the press is older than the wait limit (the clock moves 31 s): the press is over, a new one is accepted, its fast repeat is not
+        let later = now1() + 31_000;
+        let third = doc.retry_rows_at(&["q8".to_string()], later);
+        assert_eq!(
+            third["started"],
+            json!(["q8"]),
+            "a press after the limit is accepted: {third}"
+        );
+        let again = doc.retry_rows_at(&["q8".to_string()], later + 100);
+        assert_eq!(again["started"], json!([]), "and its fast repeat is refused: {again}");
+    }
+
+    #[test]
+    fn a_re_analysis_long_after_the_first_one_is_not_failed_and_a_deferral_does_not_count() {
+        let (doc, a, _b) = first_open_doc();
+        *a.wav.lock().unwrap() = Some(PathBuf::from("/nonexistent/a.wav"));
+        a.has_events.store(true, Ordering::SeqCst);
+        a.life.ready_at.store(1, Ordering::SeqCst); // the first analysis ended long ago
+        clear_after_success(&a);
+        assert_eq!(a.life.ready_at.load(Ordering::SeqCst), 0, "success ends the clock");
+        // a later re-analysis: its clock starts at its round, not at the old time
+        a.has_events.store(false, Ordering::SeqCst);
+        std::thread::sleep(std::time::Duration::from_millis(5));
+        let _flag = RoundFlag::set(vec![a.clone()]);
+        let at = a.life.ready_at.load(Ordering::SeqCst);
+        assert!(
+            at > 1 && now1() - at < 1000,
+            "the clock starts at the round start: {at}"
+        );
+        let facts = doc.state_facts();
+        assert!(facts.iter().find(|(f, _)| f.row == "q7").unwrap().0.analysing_ms < 1000);
+    }
+
+    #[test]
+    fn retry_only_ends_when_a_request_has_nothing_to_do_and_when_the_source_leaves() {
+        let (_doc, a, _b) = first_open_doc();
+        a.has_events.store(true, Ordering::SeqCst);
+        a.life.retry_only.store(true, Ordering::SeqCst);
+        a.life.retry_at.store(5, Ordering::SeqCst);
+        let mut st = WorkerState::default();
+        assert!(!session().absorb(Msg::Request(a.clone()), &mut st));
+        assert!(
+            !a.life.retry_only.load(Ordering::SeqCst),
+            "a request with nothing to do ends the Retry mark"
+        );
+        assert_eq!(a.life.retry_at.load(Ordering::SeqCst), 0);
+    }
+
+    #[test]
+    fn a_source_on_two_dao_tracks_is_in_both_rows_and_both_are_gated() {
+        let (doc, a, _b) = first_open_doc();
+        doc.sequences.lock().unwrap().insert(
+            9,
+            SeqInfo {
+                name: Some("Bus".into()),
+                order: Some(2),
+            },
+        );
+        a.regions.lock().unwrap().push(RegionSlot {
+            id: 99,
+            rec: service::RegionRec {
+                start_mod: 0.0,
+                dur_mod: 1.0,
+                start_play: 5.0,
+            },
+            sequence: 9,
+            name: None,
+        });
+        *a.wav.lock().unwrap() = Some(PathBuf::from("/nonexistent/a.wav"));
+        a.has_events.store(true, Ordering::SeqCst);
+        *a.notes.lock().unwrap() = vec![[1.0, 0.5]; 4];
+        set_fail(&a, firstopen::Fail::Read);
+        let v = doc.states_now();
+        let ids: Vec<&str> = v["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["id"].as_str().unwrap())
+            .collect();
+        assert!(
+            ids.contains(&"q7") && ids.contains(&"q9"),
+            "the source is in the row of each sequence: {ids:?}"
+        );
+        assert_eq!(state_of_row(&doc, "q9")["state"], json!("failed"));
+        let gated: Vec<String> = doc.rows_not_done().into_iter().map(|(id, _)| id).collect();
+        assert!(
+            gated.contains(&"q7".to_string()) && gated.contains(&"q9".to_string()),
+            "{gated:?}"
+        );
+        // the hits of the source count once in the document
+        set_fail(&a, firstopen::Fail::Read);
+        *a.life.fail.lock().unwrap() = None;
+        a.analysis_failed.store(false, Ordering::SeqCst);
+        assert_eq!(doc.states_now()["doc"]["hits"], json!(4));
+    }
+
+    #[test]
+    fn a_panic_in_the_gate_fails_closed_so_no_handle_is_ready() {
+        let (doc, _a, _b) = first_open_doc();
+        assert_eq!(doc.rows_not_done_with(true), vec![("*".to_string(), true)]);
+        assert!(doc.rows_not_done_with(false).iter().all(|(id, _)| id != "*"));
     }
 
     #[test]

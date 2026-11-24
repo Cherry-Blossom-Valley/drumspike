@@ -292,3 +292,18 @@ reached). The standalone stage `standalone-diff` is expected to pass on this tic
   would need a longer wait than the gate allows. The read limit and the wait limit have stage runs (`editor-firstopen-limit`, `editor-firstopen-offline`).
 - Stages: `editor-firstopen` (flow, offline with a late arrival, failed with Retry of one track, a limit run, stale hits kept) and `editor-firstopen-fault` (one fault run for each
   reason).
+
+## 13. Round 2 (review of c952e19)
+
+- M1: a press of Retry that is older than the wait limit is over, so a row that never gets audio can be retried again (Offline, Retry, asking for 30 s, Offline, Retry ...).
+  The mark is taken again with a compare and exchange from the value that was seen, so two fast presses are still one job. The mark also ends when a round ends on the
+  old audio. I did not clear it where the reader gives up (`due_read_retries` with the access off), because that would end the state "asking the DAW for the audio"
+  at once instead of after the wait limit (R8). Stage: `editor-firstopen-offline` presses again after the limit; the fault run `retry-dead-end` shows the dead end.
+- S2: the page poll goes on after an error answer and after a rejected call. S3: the analysis clock starts at the round start and ends at the success; a deferral
+  does not count. S4: the Retry-only mark ends when a request has nothing to do and when the source leaves. S5: a source is in the row of every region sequence it
+  has a clip on (its hits count once in the document); each row is in the list and gated. S6: a panic in the gate answers `*`: every row counts as preparing.
+- N1: the poll is 1 s for any state in progress and for the first 30 s of every state, then 5 s while rows are empty, offline or failed; a new state or a press resets it.
+  N2: the focus goes to the row strip when the Retry button goes. N3: `Limits::read` and `Fault::read` are read once per process.
+- N4, what is NOT proved, plainly: (1) the analysis limit is covered by unit tests only, no stage waits that long; (2) the panic path (last good list, one error line,
+  gate closed) is covered by unit tests only; (3) a Retry of a read works only when the host calls back (notifyModelUpdates): a host that never does leaves the row
+  asking, then offline again. Nothing was tried in a real DAW.

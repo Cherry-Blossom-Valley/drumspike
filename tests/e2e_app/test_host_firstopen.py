@@ -165,6 +165,40 @@ def test_a_host_that_does_not_answer_the_command_keeps_the_old_texts_and_shows_n
     assert host_app.evaluate("() => [HST.absent, document.getElementById('hstLine').classList.contains('hstQuiet')]") == [False, False], "a later answer brings the line back"
 
 
+def test_one_error_does_not_end_the_poll_and_a_later_answer_brings_the_list_back(host):
+    rows = [row("q1", "Kick In", "analysing", "Kick In: analysing", [K])]
+    give(host, payload(rows, "analysing", "Analysing: 0 of 1 track."))
+    host.evaluate("() => HST.take({ error: 'The plugin could not read the state of the tracks.' })")
+    assert host.evaluate("() => HST.poll !== null"), "S2: the poll goes on after an error answer"
+    host.evaluate("""() => { clearTimeout(HST.poll); HST.poll = null; B.hostStates = async () => { throw new Error('one rejected answer'); }; return HST.pull(); }""")
+    assert host.evaluate("() => HST.poll !== null"), "S2: and after a rejected call"
+    host.evaluate("""p => { clearTimeout(HST.poll); B.hostStates = async () => p; return HST.pull(); }""", payload(rows, "analysing", "Analysing: 1 of 1 track.", gen=9))
+    host.wait_for_function("() => document.querySelector('#hstLine .hstText').textContent === 'Analysing: 1 of 1 track.'")
+    assert host.evaluate("() => HST.error") == ""
+
+
+def test_the_poll_slows_down_only_when_nothing_is_in_progress_for_a_while(host):
+    failed = [row("q1", "Kick In", "failed", "Kick In: the analysis did not finish. Press Retry.", [K], retry=True)]
+    give(host, payload(failed, "attention", "1 of 1 track needs attention.", attention=1))
+    delay = """() => { let d = 0; const real = window.setTimeout; window.setTimeout = (f, ms) => { d = ms; return real(f, 100000); }; HST.schedule(); window.setTimeout = real; return d; }"""
+    assert host.evaluate(delay) == 1000
+    host.evaluate("() => { HST.since = performance.now() - 31000; }")
+    assert host.evaluate(delay) == 5000, "N1: offline or failed for more than 30 s: 5 s"
+    busy = [row("q1", "Kick In", "reading", "Kick In: reading the audio", [K])]
+    give(host, payload(busy, "reading", "Reading the audio: 0 of 1 track.", gen=5))
+    host.evaluate("() => { HST.since = performance.now() - 99000; }")
+    assert host.evaluate(delay) == 1000, "something in progress is always asked every second"
+
+
+def test_the_focus_stays_in_the_row_strip_when_the_retry_button_goes(host):
+    failed = [row("q1", "Kick In", "failed", "Kick In: the analysis did not finish. Press Retry.", [K], retry=True)]
+    give(host, payload(failed, "attention", "1 of 1 track needs attention.", attention=1))
+    host.evaluate("() => document.querySelector('#lanesScroll .hostState .hstRetry').focus()")
+    assert host.evaluate("() => document.activeElement.className.includes('hstRetry')")
+    give(host, payload([row("q1", "Kick In", "analysing", "Kick In: analysing", [K])], "analysing", "Analysing: 0 of 1 track.", gen=2))
+    assert host.evaluate("() => document.activeElement !== document.body && document.activeElement.classList.contains('hostState')"), "N2: the focus never falls to the body"
+
+
 def test_the_standalone_page_has_no_element_and_nothing_focusable_of_it(app, make_project):
     open_project(app, make_project(tracks=FOUR, seconds=6.0))
     assert app.evaluate("() => { HST.init(); HST.take({ gen: 1, doc_id: 'd', doc: { state: 'done', text: 'x' }, rows: [] }); return HST.ready; }") is False

@@ -624,7 +624,7 @@
   async function firstopenRun() {
     if (T.fault === "first-announce") HST.fault = "first-announce";
     var inv = window.__TAURI__.core.invoke, mode = T.arg || "flow", t0 = performance.now(), timeline = [], pressed = null, answers = null;
-    var before = null, after = null, edited = null, seenAttention = false, pressAt = 0, attentionAt = 0;
+    var before = null, after = null, edited = null, seenAttention = false, pressAt = 0, attentionAt = 0, answers2 = null;
     function dom() {
       var line = document.getElementById("hstLine"), rows = [].map.call(document.querySelectorAll("#lanesScroll .hostState, #lanesScroll .hostCard"), function (e) {
         return { row: e.dataset.row, state: e.dataset.state, text: e.querySelector(".hstRowText").textContent, retry: !!e.querySelector(".hstRetry") };
@@ -671,13 +671,17 @@
         answers = [await a, await b]; pressed = need[0].id;
       }
       // the document is done AND the page has loaded the project (its tracks and their hits): the plugin is ahead of the page by a reload
+      // `offline`: after the wait limit the row is offline again with Retry: a second press (M1) must start a job again
+      if (mode === "offline" && pressed && !answers2 && performance.now() - t0 - pressAt > 3600 && need.some(function (r) { return r.id === pressed; })) {
+        answers2 = [await inv("plugin_host_retry", { rows: [pressed] })];
+      }
       if (mode === "flow" && st && st.doc && st.doc.state === "done" && d.tracks >= st.rows.length && d.hits > 0 && d.line === st.doc.text) finished = true;
       if ((mode === "offline" || mode === "stale" || mode === "limit") && pressed && st && st.doc && st.doc.state === "done") finished = true;
       if (mode === "failed" && pressed && performance.now() - t0 - pressAt > 9000) finished = true;
       if (!finished) await new Promise(function (r) { setTimeout(r, 100); });
     }
     if (mode === "failed" || mode === "stale") { try { after = await eventsOf(); } catch (e) { after = null; } }
-    post({ kind: "firstopen", mode: mode, timeline: timeline, pressed: pressed, press_at: Math.round(pressAt), answers: answers, seen_attention: seenAttention,
+    post({ kind: "firstopen", mode: mode, timeline: timeline, pressed: pressed, press_at: Math.round(pressAt), answers: answers, answers2: answers2, seen_attention: seenAttention,
       before: before, after: after, edited: edited, order: S.order || [], writes: HST.writes, finished: finished });
   }
   /* Mode leftovers (M1d1, #575): the page shows the name of the DAW track where it names a track (progress, info line, status bar, undo label,

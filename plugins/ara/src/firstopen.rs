@@ -80,8 +80,14 @@ impl Default for Limits {
 }
 
 impl Limits {
+    /// N3: read once per process (the switches never change inside a process).
     #[must_use]
     pub fn read() -> Limits {
+        static L: std::sync::OnceLock<Limits> = std::sync::OnceLock::new();
+        *L.get_or_init(Limits::read_now)
+    }
+
+    fn read_now() -> Limits {
         let mut l = Limits::default();
         if let Ok(v) = crate::test_switch("DS_ARA_FIRSTOPEN_MS") {
             for part in v.split(',') {
@@ -116,8 +122,14 @@ pub struct Fault {
 }
 
 impl Fault {
+    /// N3: read once per process.
     #[must_use]
     pub fn read() -> Fault {
+        static F: std::sync::OnceLock<Fault> = std::sync::OnceLock::new();
+        *F.get_or_init(Fault::read_now)
+    }
+
+    fn read_now() -> Fault {
         match crate::test_switch("DS_ARA_FIRSTOPEN_FAULT").as_deref() {
             Ok("old-empty") => Fault {
                 old_empty: true,
@@ -151,6 +163,8 @@ pub struct SrcFact {
     pub machine: String,
     /// The id of the DAW track row (`q<sequence id>`, else `s<creation index>`).
     pub row: String,
+    /// The source is in this row as well as in an earlier one (a source with clips on two DAW tracks): its hits count once in the document.
+    pub dup: bool,
     /// The order of the row: the DAW order (`i32::MAX` when unknown), then the creation index.
     pub order: (i32, usize),
     /// The hits the source has (the notes).
@@ -241,6 +255,8 @@ pub struct Row {
     /// The row failed or is offline and still shows the hits of an earlier round.
     pub old_hits: bool,
     pub order: (i32, usize),
+    /// Every source of the row is in an earlier row too (its hits count there).
+    pub dup: bool,
 }
 
 impl Row {
@@ -354,6 +370,7 @@ pub fn build(facts: &[SrcFact], lim: &Limits, fault: Fault) -> States {
             hits,
             old_hits: hits > 0 && matches!(state, State::Failed | State::Offline),
             order: first.order,
+            dup: list.iter().all(|f| f.dup),
         });
     }
     rows.sort_by(|a, b| a.order.cmp(&b.order).then(a.id.cmp(&b.id)));
@@ -375,7 +392,7 @@ impl States {
     #[must_use]
     pub fn doc(&self) -> Doc {
         let m = self.rows.len();
-        let hits: usize = self.rows.iter().map(|r| r.hits).sum();
+        let hits: usize = self.rows.iter().filter(|r| !r.dup).map(|r| r.hits).sum();
         let attention = self.rows.iter().filter(|r| r.retry()).count();
         let count = |s: &[State]| self.rows.iter().filter(|r| s.contains(&r.state)).count();
         let tracks = plural(m, "track", "tracks");
@@ -456,6 +473,7 @@ mod tests {
             name: name.into(),
             machine: format!("m-{name}"),
             row: row.into(),
+            dup: false,
             order: (0, 0),
             hits: 0,
             done: false,

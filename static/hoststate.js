@@ -11,8 +11,10 @@
    at once, so the standalone page has no new element, nothing focusable and no new text (owner rule 2026-11-14). */
 "use strict";
 
-const HST = { ready: false, absent: false, st: null, gen: -1, doc: "", line: null, cards: null, poll: null, announced: "", doneAt: 0, error: "", fault: "", pulls: 0, writes: 0, lineWrites: 0 };
+const HST = { ready: false, absent: false, st: null, gen: -1, doc: "", line: null, cards: null, poll: null, announced: "", doneAt: 0, error: "", fault: "", pulls: 0, writes: 0, lineWrites: 0, since: 0 };
 const HST_POLL_MS = 1000;
+const HST_SLOW_AFTER_MS = 30000;   // N1: after this long in one state with nothing in progress the poll slows down
+const HST_SLOW_MS = 5000;
 const HST_FADE_MS = 8000;   // the line of a finished document goes quiet after this long (its state stays in the data)
 
 HST.on = () => hostMode() && HST.ready;
@@ -25,12 +27,14 @@ HST.attention = () => HST.rows().filter(r => r.retry);
    `error` keeps the last list and shows one line. */
 HST.take = function (p) {
   if (!hostMode() || !p) return false;
-  if (p.error) { HST.error = String(p.error); HST.paint(); return false; }
+  if (p.error) { HST.error = String(p.error); HST.paint(); HST.schedule(); return false; }   // S2: the poll goes on, a later answer brings the list back
   if (!p.doc || !Array.isArray(p.rows)) return false;
   if (p.doc_id === HST.doc && typeof p.gen === "number" && p.gen < HST.gen) return false;
   HST.absent = false;
   HST.doc = p.doc_id; HST.gen = typeof p.gen === "number" ? p.gen : HST.gen;
   const before = HST.st && HST.st.doc ? HST.st.doc.state : "";
+  const sig = JSON.stringify(p.rows.map(r => [r.id, r.state])) + p.doc.state;   // N1: a change of any state starts the fast poll again
+  if (sig !== HST.sig) { HST.sig = sig; HST.since = performance.now(); }
   HST.st = p; HST.error = "";
   if (p.doc.state === "done" && before !== "done") HST.doneAt = performance.now();
   if (p.doc.state !== "done") HST.doneAt = 0;
@@ -42,15 +46,23 @@ HST.pull = function () {
   if (!hostMode() || typeof B.hostStates !== "function") return Promise.resolve(false);
   HST.pulls++;
   // a host that does not answer the command (an older plugin, a bridge without it): the page keeps its own texts and shows no line
-  return B.hostStates().then(p => HST.take(p), () => { if (!HST.st) { HST.absent = true; HST.paint(); } return false; });
+  return B.hostStates().then(p => HST.take(p), () => {
+    if (!HST.st) { HST.absent = true; HST.paint(); }
+    HST.schedule();   // S2: one rejected answer does not end the poll
+    return false;
+  });
 };
 
 /* Asked again every second while a row is not done (the plugin decides; the page only asks). A finished document is not asked again:
    a change comes as the event. */
 HST.schedule = function () {
   clearTimeout(HST.poll); HST.poll = null;
-  const busy = HST.rows().some(r => r.state !== "done") || HST.rows().length === 0;
-  if (HST.ready && busy) HST.poll = setTimeout(() => HST.pull(), HST_POLL_MS);
+  const rows = HST.rows();
+  const busy = rows.some(r => r.state !== "done") || rows.length === 0 || !!HST.error;
+  // N1: 1 s while something is in progress, and for the first 30 s of any state; then 5 s while the rows are empty, offline or failed
+  const working = rows.some(r => ["waiting", "asking", "reading", "analysing"].includes(r.state));
+  const slow = !working && performance.now() - HST.since > HST_SLOW_AFTER_MS;
+  if (HST.ready && busy && !HST.absent) HST.poll = setTimeout(() => HST.pull(), slow ? HST_SLOW_MS : HST_POLL_MS);
 };
 
 HST.ensureLine = function () {
@@ -67,6 +79,7 @@ HST.ensureLine = function () {
 };
 
 HST.retry = function (ids) {
+  HST.since = performance.now();   // N1: a user action starts the fast poll again
   if (!hostMode() || typeof B.hostRetry !== "function" || !ids.length) return Promise.resolve(null);
   return B.hostRetry(ids).then(r => {
     const refused = (r && r.refused) || [];
@@ -99,7 +112,11 @@ HST.paintLine = function () {
       all.onclick = () => HST.retry(HST.attention().map(r => r.id));
       el.appendChild(all);
     }
-  } else if (all) all.remove();
+  } else if (all) {
+    const had = document.activeElement === all;
+    all.remove();
+    if (had) { el.tabIndex = -1; el.focus({ preventScroll: true }); }   // N2
+  }
 };
 
 /* The DOM row of a state row: the first source with a project track that is not merged into another row. */
@@ -129,7 +146,12 @@ HST.fill = function (el, r) {
   hstSet(t, HST.stripText(r));
   let b = el.querySelector(".hstRetry");
   if (r.retry && !b) el.appendChild(HST.makeRetry(r));
-  else if (!r.retry && b) b.remove();
+  else if (!r.retry && b) {
+    // N2: the button that has the focus goes: the focus stays in the row strip, never falls to the body
+    const had = document.activeElement === b;
+    b.remove();
+    if (had) { el.tabIndex = -1; el.focus({ preventScroll: true }); }
+  }
   el.title = r.text;
 };
 
@@ -156,7 +178,12 @@ HST.paintRows = function () {
     if (!c) { c = document.createElement("div"); c.className = "hostCard"; cards.appendChild(c); }
     HST.fill(c, r); keep.add(c);
   }
-  document.querySelectorAll("#lanesScroll .hostState, #lanesScroll .hostCard").forEach(e => { if (!keep.has(e)) e.remove(); });
+  document.querySelectorAll("#lanesScroll .hostState, #lanesScroll .hostCard").forEach(e => {
+    if (keep.has(e)) return;
+    const had = e.contains(document.activeElement);
+    e.remove();
+    if (had) { const l = HST.ensureLine(); if (l) { l.tabIndex = -1; l.focus({ preventScroll: true }); } }   // N2
+  });
   if (cards && !cards.children.length) cards.remove();
   // the cards come in the order of the DAW
   if (cards) { const order = HST.rows().map(r => r.id); [...cards.children].sort((a, b) => order.indexOf(a.dataset.row) - order.indexOf(b.dataset.row)).forEach(c => cards.appendChild(c)); }
@@ -171,7 +198,7 @@ HST.paint = function () {
 
 HST.init = function () {
   if (!hostMode() || HST.ready) return;
-  HST.ready = true;
+  HST.ready = true; HST.since = performance.now();
   if (B.listen) B.listen("plugin-states", p => HST.take(p)).catch(() => {});
   HST.paintLine();
   HST.pull();

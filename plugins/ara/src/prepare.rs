@@ -955,7 +955,7 @@ impl Prep {
                 let has = row_has(&r.id);
                 let k = |kind: Kind| self.state_for(&st, &(r.id.clone(), kind), has).to_json();
                 // M1d4: a row that is not done has no ready handle (in progress: preparing; failed or offline: none)
-                if let Some((_, busy)) = blocked.iter().find(|(id, _)| *id == r.id) {
+                if let Some((_, busy)) = blocked.iter().find(|(id, _)| *id == r.id || id == "*") {
                     let s = if *busy {
                         json!({"state": "preparing", "n": 0, "why": ""})
                     } else {
@@ -1014,7 +1014,7 @@ impl Prep {
         // M1d4: a row that is not done is never taken (its handle is not ready)
         let blocked = self.blocked();
         if items.iter().any(|(id, _)| {
-            blocked.iter().any(|(b, _)| b == id) || (id.is_empty() && blocked.iter().any(|(_, busy)| *busy))
+            blocked.iter().any(|(b, _)| b == id || b == "*") || (id.is_empty() && blocked.iter().any(|(_, busy)| *busy))
         }) {
             return Err((409, "preparing: a track is not ready yet".into()));
         }

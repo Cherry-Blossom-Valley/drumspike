@@ -7245,10 +7245,13 @@ def offline_parts(run: dict) -> dict:
     ask = fo_first(tl, lambda s: s["t"] >= rep.get("press_at", 0) and fo_row_text(s, f"{nm}: asking the DAW for the audio"))
     off2 = fo_first(tl, lambda s: ask is not None and s["t"] > ask["t"] and any(r["text"] == off_text for r in s.get("rows", [])))
     two = (len(ans) == 2 and len(ans[0].get("started", [])) == 1 and ans[1].get("started") == [])
+    ans2 = rep.get("answers2") or [{}]
+    again = ans2[0].get("started") == [rep.get("pressed")]
     parts["editor-firstopen-retry-offline"] = (
-        ask is not None and off2 is not None and two,
+        ask is not None and off2 is not None and two and again,
         f"after Retry the row says 'asking the DAW for the audio' ({'seen' if ask else 'never'}) and goes offline again after the wait limit ({'seen' if off2 else 'never'}); "
-        f"two presses in one go: started {[a.get('started') for a in ans]} (want one start and one refusal)")
+        f"two presses in one go: started {[a.get('started') for a in ans]} (want one start and one refusal); a press after the wait limit started {ans2[0].get('started')} "
+        f"(want the row again: {'a dead end if it started nothing' if not again else 'ok'}; refused: {ans2[0].get('refused')})")
     last = tl[-1]
     last_off = max((s["t"] for s in tl if any(r["text"] == off_text for r in s.get("rows", []))), default=0)
     left = [s for s in tl if s["t"] > last_off]
@@ -7352,6 +7355,8 @@ def stage_editor_firstopen_fault() -> bool:
                       "editor-firstopen-waiting", "a source with no track gives no state", "the old empty state") and ok
     ok = fault_reason("editor-firstopen-fault-no-limit", offline_parts(fo_offline("editor-firstopen-fault-no-limit", {"DS_ARA_FIRSTOPEN_FAULT": "no-limit"})),
                       "editor-firstopen-offline", "no time limit fires", "still waiting after the limit") and ok
+    ok = fault_reason("editor-firstopen-fault-retry-dead-end", offline_parts(fo_offline("editor-firstopen-fault-retry-dead-end", {"DS_ARA_FIRSTOPEN_FAULT": "retry-dead-end"})),
+                      "editor-firstopen-retry-offline", "a press of Retry never ends", "a dead end if it started nothing") and ok
     ok = fault_reason("editor-firstopen-fault-no-reason", failed_parts(fo_failed("editor-firstopen-fault-no-reason", {"DS_ARA_FIRSTOPEN_FAULT": "no-reason"})),
                       "editor-firstopen-failed", "a failed row says no reason", "no reason if it says only failed") and ok
     ok = fault_reason("editor-firstopen-fault-retry-all", failed_parts(fo_failed("editor-firstopen-fault-retry-all", {"DS_ARA_FIRSTOPEN_FAULT": "retry-all-tracks"})),
