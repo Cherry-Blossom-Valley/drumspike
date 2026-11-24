@@ -1405,7 +1405,12 @@ fn deliver_dest(sh: &Arc<Shared>, cmd: &str, args: &Value) -> Result<PathBuf, An
         .as_deref()
         .is_some_and(|d| crate::deliver::is_default_dest(d, &dest))
     {
+        let existed = dest.is_dir();
         std::fs::create_dir_all(&dest).map_err(|e| Answer::err(500, format!("{}: {e}", dest.display())))?;
+        if !existed {
+            // the stage export-dialog reads this row: the first call that names the default folder found it missing
+            session().log(json!({"event": "default_dest_made", "editor": sh.n, "command": cmd}).to_string());
+        }
     }
     drumspike_app::export::check_dest(&dest.display().to_string()).map_err(|e| Answer::error(&e))?;
     Ok(dest)

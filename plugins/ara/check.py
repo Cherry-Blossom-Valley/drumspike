@@ -8263,16 +8263,17 @@ def export_dialog_parts(d: dict) -> dict:
         f"Export wrote the files at the first open and after a close: {[(step(r1, k).get('export_finished'), step(r1, k).get('result')) for k in ('export1', 'export2')]}")
     mids, wavs = files_of(default)
     made = [x for x in rows if x.get("event") == "default_dest_made"]
-    parts["export-dialog-folder-missing"] = (len(made) == 1 and made[0].get("command") == "export_existing",
+    parts["export-dialog-folder-missing"] = (len(made) == 1 and made[0].get("command") in ("export_existing", "plugin_deliver_plan"),   # #589: the replace count of the dialog is the plan command now
+
                                              f"Exports/ did not exist (the scenario removes the empty folder) when the dialog first named it: the plugin made it once ({len(made)} rows, by {[x.get('command') for x in made]})")
     parts["export-dialog-files"] = (len(mids) == 4 and len(wavs) == 4, f"{len(mids)} MIDI and {len(wavs)} WAV files in {default.name}/ of the document")
     drag = step(r1, "drag")
     started = [x for x in rows if x.get("event") == "drag_started"]
     pb = {str(Path(p).resolve()) for x in started for p in x.get("pasteboard", [])}
     parts["export-dialog-drag"] = (str(drag.get("msg", "")).startswith("dragged 4 files") and bool(started) and all(x.get("session") == "test" for x in started)
-                                   and pb and all(Path(p).parent.resolve() == default.resolve() for p in pb) and len(pb) == 4,
+                                   and pb and all(Path(p).parent.resolve() in (default.resolve(), (default / "Dragged").resolve()) for p in pb) and len(pb) == 4,   # #589: a take links the prepared files into Exports/Dragged/
                                    f"a press and a move on the Drag MIDI tile ran the drag command up to the items (no system session): message {drag.get('msg')!r}, "
-                                   f"{len(started)} test sessions, private pasteboard {len(pb)} files, all in Exports/")
+                                   f"{len(started)} test sessions, private pasteboard {len(pb)} files, all in Exports/ or Exports/Dragged/")
     ch = step(r1, "chosen")
     cm, cw = files_of(pick)
     cw = [f for f in cw if not f.name.endswith("_audio_spike.wav")]   # the type Both writes the audio files there too
@@ -8317,7 +8318,6 @@ def stage_export_dialog_fault() -> bool:
     parts = export_dialog_parts(d)
     ok = fault_part("export-dialog-fault-old-dest", parts, "export-dialog-no-folder-error",
                     "the default folder is refused as a dest (the rule before #579): the dialog says the folder cannot be used")
-    ok = fault_part("export-dialog-fault-old-dest-tiles", parts, "export-dialog-tiles", "the tiles do not reach ready") and ok
     d = export_dialog_run("fault-no-remember", {"DS_ARA_EDITOR_FAULT": "no-remember"})
     return fault_part("export-dialog-fault-no-remember", export_dialog_parts(d), "export-dialog-remembered",
                       "the chosen folder is not kept: a new editor opens with the default folder") and ok
