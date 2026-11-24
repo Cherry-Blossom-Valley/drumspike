@@ -989,7 +989,7 @@ impl Prep {
         }
         json!({"gen": st.gen, "rows": items, "merged": merged, "counters": {"cycles": st.cycles, "jobs": st.jobs},
                "used": {"spike": st.used[0], "audio": st.used[1]},
-               "hint": "Drop at the start of the session"})
+               "hint": crate::deliver::DROP_HINT})
     }
 
     fn push(&self) {

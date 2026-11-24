@@ -14,6 +14,9 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+/// The sentence under the handles and next to the tiles of the dialog (R12, #589). The page has the same text (`DLV_HINT` in `static/deliver.js`).
+pub const DROP_HINT: &str = "Drop at the start of the session, not at the clip";
+
 /// One playback region for the export: the slice of the source `[start_mod, start_mod + dur_mod)` (from the round of the
 /// analysis, so it belongs to the hits) sits in the song from `start_play` for `dur_play` seconds (live).
 #[derive(Debug, Clone, Copy, PartialEq)]

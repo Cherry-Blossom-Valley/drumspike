@@ -20,7 +20,10 @@ const DLV_ICONS = {
   spike: '<path d="M1 11.5h5l1-9.5 1 9.5h5"/>',
   audio: '<path d="M1.5 6v2M4 4v6M6.5 2v10M9 4.5v5M11.5 3v8M13.5 6v2"/>',
 };
-const DLV_HINT = "Drop at the start of the session";
+/* R12 (#589): the files start at song position 0, so a drop at the clip puts every note late. The sentence is the same in the toolbar, the tooltips, the message of a
+   drag, the dialog and the plugin's payload (plugins/ara/src/prepare.rs, `hint`): one text. */
+const DLV_HINT = "Drop at the start of the session, not at the clip";
+const DLV_LATE = "If the notes are late, move the clip to the start of the session";
 const DLV_TEMPO = "If your DAW asks about the tempo of this MIDI, choose the current tempo map.";
 
 DLV.fault = "";   // the fault run of the check (leak: the handles show without the mode); never set by the page itself
@@ -127,7 +130,9 @@ DLV.drag = async function (items) {
   let files;
   try { files = (await B.deliverTake(items)).files; }
   catch (e) { setMsg(`drag refused: ${errText(e)}`, "error"); DLV.pull(); return; }
-  B.dragFiles(files).then(() => setMsg(`dragged ${files.length} item${files.length === 1 ? "" : "s"}: ${DLV_HINT.toLowerCase()}`))
+  const n = `${files.length} item${files.length === 1 ? "" : "s"}`;
+  setMsg(`Dragging ${n}: ${DLV_HINT.charAt(0).toLowerCase() + DLV_HINT.slice(1)}`);   // R12: the hint shows at the START of the drag, before the system drag runs
+  B.dragFiles(files).then(() => setMsg(`dragged ${n}. ${DLV_LATE}`))
     .catch(e => setMsg(`drag failed: ${errText(e)}`, "error"));
 };
 

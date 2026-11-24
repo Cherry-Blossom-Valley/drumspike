@@ -187,3 +187,40 @@ def test_measure_the_page_cost_of_forty_rows_with_the_dialog_open(host):
       return { ms: t.reduce((a, b) => a + b, 0) / t.length, bytes: JSON.stringify(mk(1)).length }; }""")
     print(f"MEASURE page, 40 rows, dialog open: one payload {r['ms']:.2f} ms to take and repaint, {r['bytes']} bytes")
     assert 0 <= r["ms"] < 250
+
+
+HINT = "Drop at the start of the session, not at the clip"
+
+
+def test_the_hint_shows_before_the_drag_starts_and_after_it_says_what_to_do_when_notes_are_late(host):
+    """R12 (#589): a MIDI file dropped at the clip start puts every note late. The message is set BEFORE the system drag is asked for, and after the drop
+    it says what to do; the toolbar hint is a visible note (the accent colour) and the dialog shows the same sentence next to its tiles."""
+    give(host, payload())
+    host.evaluate("""() => { window.__order = []; B.dragFiles = async files => { window.__order.push(['drag', document.querySelector('#stMsg').textContent]); return true; }; }""")
+    host.evaluate("() => DLV.drag([{ row: 'q1', kind: 'midi' }, { row: 'q2', kind: 'midi' }])")
+    host.wait_for_function("() => window.__order.length === 1 && /^dragged/.test(document.querySelector('#stMsg').textContent)")
+    during = host.evaluate("() => window.__order[0][1]")
+    assert during == "Dragging 2 items: drop at the start of the session, not at the clip", during
+    assert host.locator("#stMsg").inner_text() == "dragged 2 items. If the notes are late, move the clip to the start of the session"
+    assert host.inner_text("#dlvHint") == HINT
+    assert host.evaluate("() => getComputedStyle(document.querySelector('#dlvHint')).color") == "rgb(77, 163, 255)"
+    open_dialog(host)
+    host.wait_for_function("() => document.querySelector('#exDragMidi').dataset.state === 'ready'")
+    assert host.inner_text("#exDragHint") == HINT and host.locator("#exDragHint").is_visible()
+    host.evaluate("() => { window.__order = []; }")
+    box = host.locator("#exDragMidi").bounding_box()
+    host.mouse.move(box["x"] + 5, box["y"] + 5)
+    host.mouse.down()
+    host.mouse.move(box["x"] + 60, box["y"] + 20, steps=4)
+    host.mouse.up()
+    host.wait_for_function("() => window.__order.length === 1")
+    assert host.evaluate("() => window.__order[0][1]") == "Dragging 3 files: drop at the start of the session, not at the clip"
+
+
+def test_the_standalone_page_has_no_drop_hint(app, make_project):
+    from test_host_page import analyzed
+    analyzed(app, make_project(tracks=FOUR, seconds=6.0))
+    app.evaluate("() => openExport('all')")
+    app.wait_for_function("() => !document.querySelector('#exportModal').classList.contains('hidden')")
+    assert app.evaluate("() => [document.getElementById('dlvHint'), document.getElementById('exDragHint')]") == [None, None]
+    app.evaluate("() => exClose()")

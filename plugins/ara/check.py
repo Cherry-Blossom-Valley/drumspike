@@ -8579,7 +8579,7 @@ def deliver_parts(d: dict) -> dict:
     parts["deliver-handles"] = (len(strips) == 2 and all([h["kind"] for h in s_] == ["midi", "spike", "audio"] for s_ in strips)
                                 and all([h["state"] for h in s_] == ["ready", "off", "off"] for s_ in strips)
                                 and [h["kind"] for h in d1.get("bar", [])] == ["midi", "spike", "all", "merged"]
-                                and [h["state"] for h in d2.get("bar", [])] == ["ready"] * 4 and d1.get("hint") == "Drop at the start of the session",
+                                and [h["state"] for h in d2.get("bar", [])] == ["ready"] * 4 and d1.get("hint") == "Drop at the start of the session, not at the clip",
                                 f"two DAW tracks have a strip of three handles ({[[h['state'] for h in s_] for s_ in strips]}), the toolbar has four ({[h['kind'] for h in d1.get('bar', [])]}) and "
                                 f"all are ready after the first use ({[h['state'] for h in d2.get('bar', [])]}); the hint {d1.get('hint')!r}")
     return parts

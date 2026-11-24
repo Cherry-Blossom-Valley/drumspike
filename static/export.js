@@ -138,7 +138,7 @@ function exRender() {   // the controls from EX; the Export button and the tiles
     const t = $(k === "midi" ? "#exDragMidi" : "#exDragSpikes");
     t.classList.toggle("hidden", !EX[k]);
     if (!EX[k]) continue;
-    if (hostMode()) { exHostTile(t, k, names.length); continue; }
+    if (hostMode()) { exHostDragHint(); exHostTile(t, k, names.length); continue; }
     const files = EX.drag[k];
     t.dataset.state = !names.length || !EX.midi && !EX.spikes ? "disabled" : EX.drag.failed ? "error" : files ? "ready" : "preparing";
     t.querySelector(".exDragN").textContent = t.dataset.state === "preparing" ? "preparing…" : files ? exPlural(files.length, "file", "files") : "";
@@ -154,6 +154,11 @@ function exRender() {   // the controls from EX; the Export button and the tiles
   exDestFold();
 }
 /* #589: a tile in a DAW is the aggregate state of the items it holds (the same states as the handles); it drags with plugin_deliver_take. */
+function exHostDragHint() {   // R12: the sentence stands next to the tiles (an element that only a DAW makes)
+  let h = document.getElementById("exDragHint");
+  if (!h) { h = document.createElement("div"); h.id = "exDragHint"; h.className = "dlvHint exDragHint"; $("#exDrags").after(h); }
+  h.textContent = DLV_HINT;
+}
 function exHostTile(t, k, n) {
   const items = exHostItems(k), st = DLV.agg(items.map(exHostState));
   t.dataset.state = !n || !items.length || (!EX.midi && !EX.spikes) ? "disabled" : st.state === "ready" ? "ready" : st.state === "error" ? "error" : st.state === "none" ? "disabled" : "preparing";
@@ -433,7 +438,9 @@ async function exDragStart(kind) {
     let files;
     try { files = (await B.deliverTake(exHostItems(kind === "midi" ? "midi" : "spikes"))).files; }
     catch (e) { setMsg(`drag refused: ${errText(e)}`, "error"); DLV.pull(); return; }
-    B.dragFiles(files).then(() => setMsg(`dragged ${exPlural(files.length, "file", "files")}: drop ${files.length === 1 ? "it" : "them"} into your DAW`))
+    const n = exPlural(files.length, "file", "files");
+    setMsg(`Dragging ${n}: ${DLV_HINT.charAt(0).toLowerCase() + DLV_HINT.slice(1)}`);   // R12: the hint shows at the START of the drag
+    B.dragFiles(files).then(() => setMsg(`dragged ${n}. ${DLV_LATE}`))
       .catch(e => setMsg(`drag failed: ${errText(e)}`, "error"));
     return;
   }

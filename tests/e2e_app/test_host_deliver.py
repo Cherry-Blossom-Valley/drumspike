@@ -23,7 +23,7 @@ def payload(gen=1, midi=S_READY, spike=S_OFF, audio=S_OFF, merged=S_READY, used=
     ids = [("q1", "Drums"), ("q2", "Toms"), ("s3", FOUR[3][0])]
     srcs = {"q1": [FOUR[0][0], FOUR[1][0]], "q2": [FOUR[2][0]], "s3": [FOUR[3][0]]}
     return {"gen": gen, "rows": [{"id": i, "name": n, "srcs": srcs[i], "midi": midi, "spike": spike, "audio": audio} for i, n in ids],
-            "merged": merged, "used": used or {"spike": False, "audio": False}, "hint": "Drop at the start of the session"}
+            "merged": merged, "used": used or {"spike": False, "audio": False}, "hint": "Drop at the start of the session, not at the clip"}
 
 
 @pytest.fixture
@@ -68,7 +68,7 @@ def test_every_row_header_has_three_handles_and_the_toolbar_four(host):
     assert [h["kind"] for h in bar] == ["midi", "spike", "all", "merged"]
     assert [h["state"] for h in bar] == ["ready", "off", "off", "ready"]
     assert all("Drop at the start of the session" in h["title"] for h in row + bar), "the hint is in every tooltip"
-    assert host.inner_text("#dlvHint") == "Drop at the start of the session"
+    assert host.inner_text("#dlvHint") == "Drop at the start of the session, not at the clip"
     assert "current tempo map" in row[0]["title"] and "current tempo map" in bar[0]["title"]
 
 

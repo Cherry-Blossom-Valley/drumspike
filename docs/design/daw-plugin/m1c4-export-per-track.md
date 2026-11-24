@@ -174,6 +174,11 @@ Every change is behind `hostMode()`. The standalone page has no new element, not
 11. R11: the standalone dialog is not touched: a page test with the plugin mode off checks that it lists audio tracks and calls `export_all`,
     `export_existing` and `export_drag_prepare`.
 
+12. R12: the files start at the session start, so a drop at the clip puts every note late (found in a DAW). The hint is "Drop at the start of the
+    session, not at the clip" (`DLV_HINT`, and `DROP_HINT` in `plugins/ara/src/deliver.rs` for the payload: one text in two places, a stage compares them).
+    It shows at the start of a drag ("Dragging n items: drop at the start of the session, not at the clip"), after the drop says "dragged n items. If the notes
+    are late, move the clip to the start of the session", the toolbar hint has the accent colour, and the dialog shows it next to its tiles (host mode only).
+
 ## 8. Gate plan and measures
 
 Stage `export-rows` (test host, mode `exportdialog` family, no system drag, no real panel, no real pasteboard): a DAW track with clips of
