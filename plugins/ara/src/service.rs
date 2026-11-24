@@ -486,7 +486,7 @@ pub struct DocService {
     pub fail_restores: usize,
     /// #577 (Q4): the settings that the archive holds for a source that has no result yet (F5). The first round makes the new
     /// record of that track and lays them over it, so the values of the session win over any start value.
-    kept: HashMap<String, Map<String, Value>>,
+    kept: HashMap<usize, Map<String, Value>>,
 }
 
 /// The home folder of the service of a document: inside the document's folder, so inside
@@ -673,8 +673,11 @@ impl DocService {
         }
     }
 
-    /// #577 (Q4): set the settings of the sources that the archive holds with no result (see `kept`).
-    pub fn keep_settings(&mut self, kept: HashMap<String, Map<String, Value>>) {
+    /// #577 (Q4, S7, S8): the settings that the document holds for a source (by its creation index) that has no track in the project yet: a source
+    /// the archive holds with no result, or a source whose track record was lost in a round (`forget_track`). The caller replaces the whole map
+    /// before each round; `analyse` lays an entry over the new record of exactly that source and drops the entries of sources that are gone.
+    /// A source that is not in the map (a new clip, a source that the DAW removed and made again) gets the user defaults.
+    pub fn keep_settings(&mut self, kept: HashMap<usize, Map<String, Value>>) {
         self.kept = kept;
     }
 
@@ -996,6 +999,9 @@ impl DocService {
         let mut track_of = HashMap::new();
         let mut role_audio: Vec<(String, usize, Option<String>)> = Vec::new();
         // #577: ONE snapshot of the user defaults for the round, and the notes the tracks of each role use now
+        if switch("DS_ARA_DEFAULTS_FAULT").as_deref() != Some("keep-gone") {
+            self.kept.retain(|seq, _| snaps.iter().any(|s| s.seq == *seq)); // S7: a removed source leaves no values behind
+        }
         let defaults = crate::userdefaults::current();
         let mut used: HashMap<String, Vec<i64>> = HashMap::new();
         if let Ok(all) = svc.tracks_get(&sid) {
@@ -1014,11 +1020,11 @@ impl DocService {
                 role_audio.push((name.clone(), b, track.role_source.as_ref().and(track.role.clone())));
             }
             let mut record = serde_json::to_value(track).unwrap_or(Value::Null);
-            let is_kept = self.kept.contains_key(name);
+            let is_kept = self.kept.contains_key(&s.seq);
             fresh.push(!is_kept);
             // #577 (Q4): a source that the archive held with no result: the settings of the session win over the new record
             // (`DS_ARA_DEFAULTS_FAULT=lose-kept` is the fault run: they are dropped, as main did)
-            if let Some(kept) = self.kept.remove(name) {
+            if let Some(kept) = self.kept.remove(&s.seq) {
                 if switch("DS_ARA_DEFAULTS_FAULT").as_deref() != Some("lose-kept") {
                     if let Some(v) = overlay_settings(&record, &kept) {
                         record = v;
@@ -2108,7 +2114,7 @@ mod tests {
         m.insert("role_source".into(), json!("user"));
         m.insert("note".into(), json!(41));
         m.insert("params".into(), json!({"min_gap_ms": 77}));
-        kept.insert("snare".to_string(), m);
+        kept.insert(0, m);
         doc.keep_settings(kept);
         // the file name says snare, the session says tom with note 41: the session wins
         let src = snapshot_of(&cache, &id, 0, "snare.wav");
@@ -2119,6 +2125,57 @@ mod tests {
         assert_eq!(got["snare"]["role"], "tom");
         assert_eq!(got["snare"]["note"], 41);
         assert_eq!(got["snare"]["params"]["min_gap_ms"], 77);
+    }
+
+    /// S7: a source that is gone before its first round leaves no values behind; a new source of the same name is a new track.
+    #[test]
+    fn the_kept_values_of_a_removed_source_never_reach_a_new_source_of_the_same_name() {
+        let cache = scratch("kept-gone");
+        let id = new_doc_id();
+        let mut doc = DocService::new(cache.clone(), id.clone());
+        let mut m = Map::new();
+        m.insert("role".into(), json!("tom"));
+        m.insert("role_source".into(), json!("user"));
+        m.insert("note".into(), json!(41));
+        doc.keep_settings(HashMap::from([(0, m)]));
+        // source 0 is removed; source 1 has the same file name and arrives
+        let again = snapshot_of(&cache, &id, 1, "snare.wav");
+        doc.analyse(std::slice::from_ref(&again), false).unwrap();
+        let svc = doc.service().unwrap();
+        let sid = doc.sid.clone().unwrap();
+        let got = settings_of(&svc, &sid, &["snare".to_string()]).unwrap();
+        assert_eq!(
+            got["snare"]["role"], "snare",
+            "a new track: the role of its name, not the old session"
+        );
+        assert_eq!(got["snare"]["note"], 38);
+        assert!(doc.kept.is_empty(), "the entry of the gone source was dropped");
+    }
+
+    /// S8: a source whose record was lost in a round and comes back as new gets the values the document holds (the caller passes them by its
+    /// seq); S9: a restore that comes after a first round replaces the project, and the values it brings win over the start values of that round.
+    #[test]
+    fn a_restore_after_a_first_round_wins_and_the_values_of_the_document_win_for_the_same_source() {
+        let cache = scratch("kept-late");
+        let id = new_doc_id();
+        let mut doc = DocService::new(cache.clone(), id.clone());
+        let src = snapshot_of(&cache, &id, 0, "snare.wav");
+        doc.analyse(std::slice::from_ref(&src), false).unwrap(); // a round that saw the source before the restore: built-in values
+        let mut m = Map::new();
+        m.insert("role".into(), json!("tom"));
+        m.insert("role_source".into(), json!("user"));
+        m.insert("note".into(), json!(41));
+        // the restore (no track with a result) resets the project and the tracks of the service; the values wait for the source
+        doc.restore(&[]).unwrap();
+        doc.keep_settings(HashMap::from([(0, m)]));
+        doc.analyse(std::slice::from_ref(&src), false).unwrap();
+        let svc = doc.service().unwrap();
+        let sid = doc.sid.clone().unwrap();
+        let got = settings_of(&svc, &sid, &["snare".to_string()]).unwrap();
+        assert_eq!(
+            (got["snare"]["role"].as_str(), got["snare"]["note"].as_i64()),
+            (Some("tom"), Some(41))
+        );
     }
 
     fn defaults_with(text: &str) -> crate::userdefaults::Loaded {

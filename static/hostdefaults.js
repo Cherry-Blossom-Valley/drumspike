@@ -4,7 +4,6 @@
    - Inspector: "Save as default for new <role> tracks" and "Reset to default for new <role> tracks". Both act on the ROLE of the selected row
      and never change a track that exists.
    - Menu (Track): "Load Preset..." and "Save Preset...". A preset changes the tracks of the document only after the user confirmed, as ONE undo step.
-   - The page options of the file (`follow`) for a page that has none of its own.
    Every element is made here, in JS, and only in host mode: with the mode off hostDefaultsInit() and the other entry points return at once, so
    the standalone page has no new element, nothing focusable and no new text (owner rule 2026-11-14). The plugin owns the files (B.defaults*,
    B.preset*); the standalone app has no such command and never reads or writes them. */
@@ -68,7 +67,7 @@ function hdInspectorSync() {
   if (!t) { HD.box.classList.add("hidden"); return; }
   HD.box.classList.remove("hidden");
   const role = t.role || "other", word = hdWord(role), notes = hdRoleNotes(role);
-  const why = t.follows ? "This track takes its hits from another track." : analysisRunning ? "An analysis is running." : HD.data && HD.data.status === "newer" ? "The defaults file is from a newer version of the plugin." : "";
+  const why = !notes.length ? "This track has no MIDI note to save." : t.follows ? "This track takes its hits from another track." : analysisRunning ? "An analysis is running." : HD.data && HD.data.status === "newer" ? "The defaults file is from a newer version of the plugin." : "";
   save.textContent = `Save as default for new ${word}${notes.length ? ": " + notes.join(", ") : ""}`;
   save.title = why || `New ${word} in every session start with the MIDI notes and the detection settings of the ${role} tracks of this session. Tracks that exist keep theirs.`;
   reset.textContent = `Reset to default for new ${word}`;
@@ -79,6 +78,7 @@ function hdInspectorSync() {
 async function hdSaveRole() {
   const t = S.tracks[INS.name]; if (!t || !hostMode()) return;
   const role = t.role || "other", word = hdWord(role), notes = hdRoleNotes(role);
+  if (!notes.length) { setMsg("error: this track has no MIDI note to save", "error"); return; }
   try {
     await B.defaultsSaveRole(role, notes, hdParamsOf(t));
     await hdLoad();
@@ -227,8 +227,15 @@ function hdOpenSave() {
       if (roles[role]) continue;
       roles[role] = { notes: Number.isInteger(t.note) ? [t.note] : [], params: hdParamsOf(t) };
     }
-    try { await B.presetSave(field.value, roles); hdClose(); setMsg(`Saved preset "${field.value.trim()}".`); }
-    catch (e) { err.textContent = errText(e); }
+    try {
+      let r = await B.presetSave(field.value, roles, false);
+      if (r && r.exists) {   // a preset of this name exists: ask before it is replaced (Cancel leaves the dialog open and writes nothing)
+        const act = await askConfirm({ title: "Replace Preset", msg: `Replace the preset "${r.name}"?`, buttons: [{ label: "Cancel", act: "cancel" }, { label: "Replace", act: "replace", cls: "primary" }] });
+        if (act !== "replace") return;
+        r = await B.presetSave(field.value, roles, true);
+      }
+      hdClose(); setMsg(`Saved preset "${field.value.trim()}".`);
+    } catch (e) { err.textContent = errText(e); }
   };
   ok.onclick = go;
   field.onkeydown = ev => { if (ev.key === "Enter") { ev.preventDefault(); go(); } ev.stopPropagation(); };
@@ -236,22 +243,10 @@ function hdOpenSave() {
   field.focus();
 }
 
-/* ---------------- the page options of the file ---------------- */
-function hdApplyFollow(d) {
-  const f = d && d.follow; if (!f) return;
-  let have = false;
-  try { have = localStorage.getItem("dsg_settings") !== null; } catch (e) { /* no storage */ }
-  if (f.mode && S.followMode !== f.mode && !have) setFollow(f.mode);
-  if (typeof f.suspend_on_edit === "boolean" && !have) SETTINGS().ui.suspendFollowOnEdit = f.suspend_on_edit;
-  let sel = null;
-  try { sel = localStorage.getItem("dsHostFollowSel"); } catch (e) { /* no storage */ }
-  if (typeof f.host_selection === "boolean" && sel === null && typeof DSHostSel !== "undefined" && DSHostSel.follows() !== f.host_selection) DSHostSel.setFollow(f.host_selection);
-}
-
 async function hostDefaultsInit() {
   if (!hostMode() || !B.defaultsGet) return;
   const d = await hdLoad();
-  hdApplyFollow(d);
+  void d;
   hdInspectorSync();
 }
 

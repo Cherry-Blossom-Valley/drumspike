@@ -467,6 +467,9 @@ struct DocShared {
     /// M1d3 (#577): the export settings of the document as the archive keeps them (`formats`, `midi_mode`, `compensate`); empty until the
     /// page sets them or a restore brings them. Lock order: events, settings, export.
     export: Mutex<serde_json::Map<String, Value>>,
+    /// #577 (Q4): the settings of the sources that the archive holds with no result, by source creation index; they wait for the first round of
+    /// the source. The whole map is replaced by each restore, and `run_job` hands the entries of live sources to the service.
+    kept_seq: Mutex<HashMap<usize, serde_json::Map<String, Value>>>,
     /// The editor's way to the service (it never takes the `svc` lock the worker holds).
     page: Arc<service::PageHandle>,
     /// The ARA playback controller of the host (M1b7), when the host gives one. Set in
@@ -625,6 +628,7 @@ impl DocShared {
             cache,
             page: svc.page_handle(),
             export: Mutex::new(serde_json::Map::new()),
+            kept_seq: Mutex::new(HashMap::new()),
             round_regions: Mutex::new(HashMap::new()),
             round_samples: Mutex::new(HashMap::new()),
             region_gen: AtomicU64::new(0),
@@ -2454,9 +2458,28 @@ impl Session {
             .iter()
             .map(|x| (x.seq, x.regions.clone(), x.sample_rate))
             .collect();
+        // #577 (Q4, S7, S8): the values the document holds for a source that has no track in the project yet: the entries of the restore, and the
+        // settings of a source whose track record was lost in a round. The service uses an entry only for a NEW source and drops the others.
+        let kept: HashMap<usize, serde_json::Map<String, Value>> = {
+            let mut m = doc.kept_seq.lock().unwrap_or_else(|e| e.into_inner());
+            m.retain(|seq, _| snaps.iter().any(|x| x.seq == *seq));
+            let mut out = m.clone();
+            let st = doc.settings.lock().unwrap_or_else(|e| e.into_inner());
+            for s in members.iter().filter(|s| takes_part(s)) {
+                let track = s.track.lock().ok().and_then(|t| t.clone());
+                if let Some(o) = track
+                    .and_then(|t| st.get(&t).and_then(Value::as_object).cloned())
+                    .filter(|o| !o.is_empty())
+                {
+                    out.entry(s.seq).or_insert(o);
+                }
+            }
+            out
+        };
         let worker_doc = doc.clone();
         let outcome = guard("service job", Err("the service job panicked".to_string()), move || {
             let mut svc = worker_doc.lock_svc();
+            svc.keep_settings(kept);
             let result = svc.analyse(&snaps, force)?;
             Ok((result, svc.id().to_string(), svc.folder(), svc.home()))
         });
@@ -2538,6 +2561,22 @@ impl Session {
                 names.sort();
                 names.dedup();
                 doc.read_settings_for(&svc, &sid, &names)
+            }
+            _ => None,
+        };
+        // #577 (S10): the export settings follow the service at each round too (the scenario `export-last:<json>` of the check sets them
+        // through the same call as the page, so the store stage proves the store direction)
+        let fresh_export = match (doc.page.service(), doc.page.sid()) {
+            (Some(svc), Some(sid)) => {
+                if let Some(args) = crate::test_switch("DS_ARA_SCENARIO").ok().and_then(|v| {
+                    v.strip_prefix("export-last:")
+                        .and_then(|j| serde_json::from_str::<Value>(j).ok())
+                }) {
+                    let mut a = args;
+                    a["sid"] = Value::from(sid.clone());
+                    let _ = svc.export_last_set(&sid, &a);
+                }
+                read_export(&svc, &sid)
             }
             _ => None,
         };
@@ -2639,6 +2678,9 @@ impl Session {
         });
         *ev = result.events.clone();
         doc.merge_settings_in(&mut st, fresh_settings);
+        if let Some(e) = fresh_export {
+            *doc.export.lock().unwrap_or_else(|x| x.into_inner()) = e;
+        }
         drop(st);
         drop(ev);
         for f in old_files {
@@ -2873,15 +2915,6 @@ impl Session {
             if let Some(id) = &id {
                 svc.set_id(id);
             }
-            // #577 (Q4): the settings of the sources that the archive holds with no result wait for their first round
-            let kept: std::collections::HashMap<String, serde_json::Map<String, Value>> = {
-                let st = worker_doc.settings.lock().unwrap_or_else(|e| e.into_inner());
-                st.iter()
-                    .filter(|(k, _)| !tracks.iter().any(|t| &t.track == *k))
-                    .filter_map(|(k, v)| v.as_object().map(|o| (k.clone(), o.clone())))
-                    .collect()
-            };
-            svc.keep_settings(kept);
             let result = svc.restore(&tracks)?;
             let export = worker_doc.export.lock().unwrap_or_else(|e| e.into_inner()).clone();
             if !export.is_empty() && crate::test_switch("DS_ARA_DEFAULTS_FAULT").as_deref() != Ok("export-drop") {
@@ -4783,6 +4816,7 @@ unsafe extern "C" fn dc_restoreObjectsFromArchive(
         let mut restored: Vec<service::RestoredTrack> = Vec::new();
         let mut used: Vec<usize> = Vec::new();
         let mut no_result: Vec<(String, serde_json::Map<String, Value>)> = Vec::new();
+        let mut kept_seq: HashMap<usize, serde_json::Map<String, Value>> = HashMap::new();
         if let Ok(list) = ctl.sources.lock() {
             for src in list.iter() {
                 let p = src.props();
@@ -4815,6 +4849,7 @@ unsafe extern "C" fn dc_restoreObjectsFromArchive(
                     if fault != "result" && !has_entry {
                         s.log(json!({"event": "restore_no_result", "name": a.name, "track": track}).to_string());
                         if !a.settings.is_empty() {
+                            kept_seq.insert(src.seq, a.settings.clone());
                             no_result.push((track, a.settings.clone()));
                         }
                         continue;
@@ -4886,6 +4921,7 @@ unsafe extern "C" fn dc_restoreObjectsFromArchive(
             }
             *ctl.doc.settings.lock().unwrap_or_else(|e| e.into_inner()) = m;
         }
+        *ctl.doc.kept_seq.lock().unwrap_or_else(|e| e.into_inner()) = kept_seq;
         send(
             s,
             Msg::Restore {

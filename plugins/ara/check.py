@@ -234,15 +234,26 @@ FILES = [name for name, *_ in SPEC]
 USER_DIR_NONE = "<none>"
 
 
+def is_host_command(cmd: list) -> bool:
+    """True for the ara-host binary however it is named: the same path, the same file after the links are resolved, or the same file name."""
+    if not cmd:
+        return False
+    c = str(cmd[0])
+    try:
+        return c == str(HOST) or Path(c).resolve() == Path(HOST).resolve() or Path(c).name == Path(HOST).name
+    except OSError:
+        return Path(c).name == Path(HOST).name
+
+
 def guard_user_dir(cmd: list, e: dict, log: str | None) -> None:
-    """#577: a run of the host never reaches the real folder of the user defaults. Every host process gets `DS_ARA_USER_DIR` below out/ (one
-    folder per log name); the value USER_DIR_NONE leaves it unset (the stage `defaults-real-path`); a value outside out/ is refused here."""
-    if not cmd or str(cmd[0]) != str(HOST):
-        return
-    if e.get("DS_ARA_USER_DIR") == USER_DIR_NONE:
-        e.pop("DS_ARA_USER_DIR")
-    elif not e.get("DS_ARA_USER_DIR"):
-        e["DS_ARA_USER_DIR"] = str(OUT / ("user-" + (log or "run").replace("/", "-")))
+    """#577: a run never reaches the real folder of the user defaults. Every host process gets `DS_ARA_USER_DIR` below out/ (one folder per log name);
+    the value USER_DIR_NONE leaves it unset (the stage `defaults-real-path`). A value outside out/ is refused for ANY command that carries it (the host,
+    cargo, a script), however the host is started."""
+    if is_host_command(cmd):
+        if e.get("DS_ARA_USER_DIR") == USER_DIR_NONE:
+            e.pop("DS_ARA_USER_DIR")
+        elif not e.get("DS_ARA_USER_DIR"):
+            e["DS_ARA_USER_DIR"] = str(OUT / ("user-" + (log or "run").replace("/", "-")))
     d = e.get("DS_ARA_USER_DIR")
     if d and not Path(d).resolve().is_relative_to(OUT.resolve()):
         raise AssertionError(f"a run would use {d} as the folder of the user defaults: outside {OUT}")
@@ -8502,12 +8513,19 @@ def stage_defaults_real_path() -> bool:
     ok, ev = real_path_facts("defaults-real-path")
     ok = pass_fail("defaults-real-path", ok, "a gate build without DS_ARA_USER_DIR has no folder and says so: " + ev)
     # the guard of the runner: a value outside out/ is refused before a process starts
-    try:
-        guard_user_dir([str(HOST)], {"DS_ARA_USER_DIR": str(Path.home() / "Library" / "Application Support" / "DrumSpike ARA")}, "x")
-        refused = False
-    except AssertionError:
-        refused = True
-    return pass_fail("defaults-real-path-guard", refused, "the runner refuses a run whose folder of the user defaults is outside out/") and ok
+    real = str(Path.home() / "Library" / "Application Support" / "DrumSpike ARA")
+    link = OUT / "ara-host-link"
+    if link.is_symlink() or link.exists():
+        link.unlink()
+    link.symlink_to(HOST)
+    refused = {}
+    for how, cmd in (("host path", [str(HOST)]), ("a link to the host", [str(link)]), ("relative host name", ["./" + Path(HOST).name]), ("cargo", ["cargo", "test"])):
+        try:
+            guard_user_dir(cmd, {"DS_ARA_USER_DIR": real}, "x")
+            refused[how] = False
+        except AssertionError:
+            refused[how] = True
+    return pass_fail("defaults-real-path-guard", all(refused.values()), f"the runner refuses a folder of the user defaults outside out/ however the command is written: {refused}") and ok
 
 
 def stage_defaults_real_path_fault() -> bool:
@@ -8582,7 +8600,9 @@ def stage_defaults_standalone_control() -> bool:
 
 def archive_with_export(label: str, archive: Path, export) -> Path:
     blob = json.loads(archive.read_text())
-    if export is None:
+    if export == "keep":
+        pass
+    elif export is None:
         blob.pop("export", None)
     else:
         blob["export"] = export
@@ -8637,7 +8657,10 @@ def unit_with_fault(name: str, filt: str, fault_env: dict) -> tuple[int, str]:
 def stage_defaults_units() -> bool:
     """The unit tests of the rules (kept session values, hostile files, the notes of a role, the stale sets after a note) pass."""
     ok = True
-    for name, filt in (("kept", "held_without"), ("userdefaults", "userdefaults"), ("service-defaults", "new_toms"), ("prepare-note", "a_changed_note")):
+    for name, filt in (
+        ("kept", "held_without"), ("kept-gone", "the_kept_values_of_a_removed_source"), ("restore-late", "a_restore_after_a_first_round"),
+        ("userdefaults", "userdefaults"), ("service-defaults", "new_toms"), ("prepare-note", "a_changed_note"),
+    ):
         rc, text = unit_with_fault(f"defaults-unit-{name}", filt, {})
         passed = sum(int(m) for m in re.findall(r"test result: ok\. (\d+) passed", text))
         ok = pass_fail(f"defaults-unit-{name}", rc == 0 and passed > 0, f"cargo test {filt}: rc={rc}, {passed} passed") and ok
@@ -8652,10 +8675,74 @@ def stage_defaults_units_fault() -> bool:
         ("hostile", "a_hostile_file", {"DS_ARA_DEFAULTS_FAULT": "trust"}),
         ("one-role", "a_save_changes_one_role", {"DS_ARA_DEFAULTS_FAULT": "all-roles"}),
         ("note-stale", "a_changed_note", {"DS_ARA_PREPARE_FAULT": "fp-no-note"}),
+        ("preset-clash", "a_name_whose_file_name", {"DS_ARA_DEFAULTS_FAULT": "preset-overwrite"}),
+        ("backup", "a_failed_backup", {"DS_ARA_DEFAULTS_FAULT": "backup-ignore"}),
+        ("kept-gone", "the_kept_values_of_a_removed_source", {"DS_ARA_DEFAULTS_FAULT": "keep-gone"}),
     ):
         rc, _text = unit_with_fault(f"defaults-unit-fault-{name}", filt, env)
         ok = pass_fail(f"defaults-unit-fault-{name}", rc != 0, f"the fault {env} made `cargo test {filt}` fail (rc={rc})") and ok
     return ok
+
+
+
+def layer_run(label: str, filt: str, fault: dict | None = None, with_dir: bool = True) -> tuple[int, str]:
+    """The unit tests of the command layer (`defaults_command` in editor.rs) with the folder of this run below out/ (S6)."""
+    d = OUT / f"user-{label}"
+    env = {**no_switch_env(), "ARA_API_DIR": str(DEPS / "ARA_SDK" / "ARA_API"), "LIBCLANG_PATH": f"{CLT}/usr/lib", "CARGO_TARGET_DIR": str(HERE / "target"), **(fault or {})}
+    if with_dir:
+        env["DS_ARA_USER_DIR"] = str(d)
+    guard_user_dir(["cargo"], env, label)
+    return run(["cargo", "test", "--locked", "--features", "test-switches", "--lib", filt, "--", "--nocapture"], env=env, log=f"{label}.log", cwd=HERE)
+
+
+def stage_editor_defaults() -> bool:
+    """The commands of the page through the real command layer: get, save a role, a preset, a colliding name (refused, the text reaches the page), delete, a hostile name,
+    and the answer without a folder."""
+    rc, text = layer_run("editor-defaults", "defaults_layer_get_save")
+    ran = "defaults_layer_get_save_preset_collision_delete_and_hostile_name ... ok" in text
+    ok = pass_fail("editor-defaults", rc == 0 and ran, f"get, save role, preset save, collision refused, delete, hostile name `../x`: rc={rc}, the test ran and passed: {ran}")
+    rc2, text2 = layer_run("editor-defaults-nofolder", "defaults_layer_answers", with_dir=False)
+    ran2 = "defaults_layer_answers_without_a_folder_and_never_panics ... ok" in text2
+    return pass_fail("editor-defaults-nofolder", rc2 == 0 and ran2, f"with no folder the page gets `nofolder` and a save says why: rc={rc2}, passed: {ran2}") and ok
+
+
+def stage_editor_defaults_fault() -> bool:
+    ok = True
+    for name, fault in (("all-roles", {"DS_ARA_DEFAULTS_FAULT": "all-roles"}), ("trust", {"DS_ARA_DEFAULTS_FAULT": "trust"}), ("overwrite", {"DS_ARA_DEFAULTS_FAULT": "preset-overwrite"})):
+        rc, _t = layer_run(f"editor-defaults-fault-{name}", "defaults_layer_get_save", fault)
+        ok = pass_fail(f"editor-defaults-fault-{name}", rc != 0, f"the fault {fault} made the command-layer test fail (rc={rc})") and ok
+    return ok
+
+
+def export_store_facts(label: str, extra: dict | None = None) -> tuple[bool, str]:
+    """S10: the plugin sets the export settings as the page does (scenario), the archive is stored, and a NEW process restores it."""
+    archive = OUT / f"{label}.araarchive"
+    if archive.exists():
+        archive.unlink()
+    want = {"formats": ["midi", "spikes"], "midi_mode": "single", "compensate": False}
+    rc, _text, _lines = host_run(
+        f"{label}-store", CLAP, ["store", "--files", *fixture_args(FILES), "--archive", str(archive)], f"cache-{label}-store",
+        extra={"DS_ARA_SCENARIO": "export-last:" + json.dumps(want), **(extra or {})},
+    )
+    stored = json.loads(archive.read_text()).get("export") if archive.exists() else None
+    back = export_facts(f"{label}-restore", archive, "keep") if archive.exists() else {"rc": 1, "last": None, "comp": None}
+    last = back["last"] or {}
+    good = rc == 0 and stored == want and back["rc"] == 0 and last.get("formats") == want["formats"] and last.get("midi_mode") == "single" and last.get("compensate") is False
+    return good, f"store rc={rc}, the archive holds export {stored}, a new process restored {last.get('formats')} {last.get('midi_mode')} compensate {last.get('compensate')}"
+
+
+def stage_doc_archive_export_store() -> bool:
+    if not HOST.exists() or not CLAP.exists():
+        return pass_fail("doc-archive-export-store", False, "no host or no CLAP: run check.sh build first")
+    ok, ev = export_store_facts("doc-archive-export-store")
+    return pass_fail("doc-archive-export-store", ok, "an export setting reaches the archive and comes back in a new process: " + ev)
+
+
+def stage_doc_archive_export_store_fault() -> bool:
+    if not HOST.exists() or not CLAP.exists():
+        return pass_fail("doc-archive-export-store-fault", False, "no host or no CLAP: run check.sh build first")
+    ok, ev = export_store_facts("doc-archive-export-store-drop", {"DS_ARA_DEFAULTS_FAULT": "export-drop"})
+    return pass_fail("doc-archive-export-store-fault", not ok, f"the fault run (the store drops the export settings) was refused by the check: {ev}")
 
 
 STAGES = {
@@ -8690,6 +8777,10 @@ STAGES = {
     "defaults-writers": stage_defaults_writers,
     "defaults-writers-fault": stage_defaults_writers_fault,
     "defaults-standalone-control": stage_defaults_standalone_control,
+    "editor-defaults": stage_editor_defaults,
+    "editor-defaults-fault": stage_editor_defaults_fault,
+    "doc-archive-export-store": stage_doc_archive_export_store,
+    "doc-archive-export-store-fault": stage_doc_archive_export_store_fault,
     "defaults-units": stage_defaults_units,
     "defaults-units-fault": stage_defaults_units_fault,
     "doc-archive-fault": stage_doc_archive_fault,
@@ -8877,7 +8968,7 @@ ORDER = [
     "fixture", "reference", "tables", "tables-fault", "identity-clap", "identity-vst3", "regions", "archive",
     "archive-paths-fault", "archive-restore-pathname",
     "threads", "doc-service", "doc-service-fault", "doc-tracks", "doc-tracks-fault", "doc-rounds", "doc-rounds-fault", "doc-two", "doc-two-fault",
-    "doc-archive", "doc-archive-fault", "doc-archive-export", "doc-archive-export-fault", "defaults-units", "defaults-units-fault", "defaults-new-track", "defaults-new-track-fault", "defaults-hostile", "defaults-hostile-fault", "defaults-real-path", "defaults-real-path-fault", "defaults-writers", "defaults-writers-fault", "defaults-standalone-control", "doc-destroy", "doc-destroy-fault", "doc-close", "doc-close-fault", "doc-home", "doc-home-fault",
+    "doc-archive", "doc-archive-fault", "doc-archive-export", "doc-archive-export-fault", "doc-archive-export-store", "doc-archive-export-store-fault", "editor-defaults", "editor-defaults-fault", "defaults-units", "defaults-units-fault", "defaults-new-track", "defaults-new-track-fault", "defaults-hostile", "defaults-hostile-fault", "defaults-real-path", "defaults-real-path-fault", "defaults-writers", "defaults-writers-fault", "defaults-standalone-control", "doc-destroy", "doc-destroy-fault", "doc-close", "doc-close-fault", "doc-home", "doc-home-fault",
     "doc-id-hostile", "doc-id-hostile-fault", "doc-same-id", "doc-same-id-fault", "doc-restore-busy", "doc-restore-busy-fault", "doc-store-window", "doc-store-window-fault", "doc-store-early-fault", "doc-restore-repair", "doc-restore-repair-fault", "doc-readd", "doc-readd-fault", "doc-readd-unknown-fault",
     "doc-retry", "doc-retry-fault", "doc-rerequest", "doc-rerequest-fault", "doc-errors", "doc-errors-fault",
     "doc-regions-change", "doc-regions-change-fault", "doc-panic", "doc-panic-fault",

@@ -22,7 +22,7 @@ STUBS = """(presets) => {
   B.defaultsGet = async () => ({ status: 'ok', text: '', roles: {}, follow: {}, export: {}, builtin: 'General MIDI', presets });
   B.defaultsSaveRole = async (role, notes, params) => { window.__calls.push(['save', role, notes, params]); return {}; };
   B.defaultsResetRole = async role => { window.__calls.push(['reset', role]); return {}; };
-  B.presetSave = async (name, roles) => { window.__calls.push(['preset', name, roles]); return {}; };
+  B.presetSave = async (name, roles, overwrite) => { window.__calls.push(['preset', name, roles, !!overwrite]); return { exists: false }; };
   B.presetDelete = async name => { window.__calls.push(['delete', name]); return {}; };
 }"""
 
@@ -134,7 +134,7 @@ def test_save_preset_takes_a_typed_name_and_the_first_track_of_each_role(host):
     host.click("#hdOk")
     host.wait_for_function("() => window.__calls.length === 1")
     call = host.evaluate("() => window.__calls[0]")
-    assert call[0] == "preset" and call[1] == "My Kit"
+    assert call[0] == "preset" and call[1] == "My Kit" and call[3] is False
     assert call[2]["kick"]["notes"] == [36] and call[2]["snare"]["notes"] == [38]
     assert "params" in call[2]["tom"]
     # a refusal of the plugin stays in the dialog
@@ -165,6 +165,31 @@ def test_the_inspector_buttons_name_the_role_and_act_on_it(host, track, role):
     host.wait_for_function("() => window.__calls.length === 2")
     assert host.evaluate("() => window.__calls[1]") == ["reset", role]
     assert f"New {role} tracks start with the built-in values." in host.inner_text("#stMsg")
+
+
+def test_saving_over_an_existing_preset_asks_first_and_cancel_writes_nothing(host):
+    host.evaluate("() => { B.presetSave = async (name, roles, overwrite) => { window.__calls.push(['preset', name, !!overwrite]); return { exists: !overwrite, name: 'My Kit' }; }; }")
+    open_track_menu(host)
+    host.click('#hostMenu [data-host="host_save_preset"]')
+    host.wait_for_selector("#hdModal:not(.hidden)")
+    host.fill("#hdName", "my kit")
+    host.click("#hdOk")
+    host.wait_for_selector("#confirmModal:not(.hidden)")
+    assert 'Replace the preset "My Kit"?' in host.inner_text("#confirmMsg")
+    host.click('#confirmActions [data-act="cancel"]')
+    assert host.evaluate("() => window.__calls") == [["preset", "my kit", False]], "cancel: the plugin was asked once and nothing was replaced"
+    assert not host.evaluate("() => document.querySelector('#hdModal').classList.contains('hidden')"), "the dialog stays open"
+    host.click("#hdOk")
+    host.wait_for_selector("#confirmModal:not(.hidden)")
+    host.click('#confirmActions [data-act="replace"]')
+    host.wait_for_function("() => window.__calls.length === 3")
+    assert host.evaluate("() => window.__calls[2]") == ["preset", "my kit", True]
+
+
+def test_the_button_is_disabled_when_the_role_has_no_note(host):
+    host.evaluate("() => { const t = S.tracks[S.order[1]]; t.note = null; setSelTrack(S.order[1]); syncInspector(true); }")
+    assert host.locator("#hdSaveBtn").is_disabled()
+    assert "no MIDI note" in host.locator("#hdSaveBtn").get_attribute("title")
 
 
 def test_a_role_with_no_role_uses_the_words_tracks_with_no_role(host):

@@ -306,7 +306,7 @@ No stage or test starts a system drag, posts a system event, shows a real panel 
 | Stage | Proves | Fault run (switch) and the reason it fails |
 |---|---|---|
 | unit tests in the crate (`crate` stage) | parser and ranges; hostile files (too big, not JSON, link, `v` 0, 2, a string, NaN as text, deep nesting, a note 300, thresholds of 4, lo above hi, unknown role, duplicate keys); unknown fields kept on rewrite; `defaults.bad.json`; newer file is read-only; the six roles with the buttons' texts; the name rules and the reserved name; the plan of Load Preset; the archive `export` field (round trip, old archive, fixture, newer fields, damaged field) | none (the stages below are the fault runs of the same rules) |
-| `defaults-new-track` | a new snare track gets note and params from the file before its first round; a track of an archive restore does not (the file changed, is gone, is damaged: the track equals the stored one); a role with no entry gets built-in values; `other` has no entry and gets note 36; the first analysis uses the thresholds | `always` (defaults also on restore): the restored track differs; `session-loses` (defaults overwrite the settings of the archive): the stored note is lost; `no-role` (new track without role takes the entry of snare) |
+| `defaults-new-track` | a new snare track gets note and params from the file before its first round; a track of an archive restore does not (the file changed, is gone, is damaged: the track equals the stored one); a role with no entry gets built-in values; `other` has no entry and gets note 36; the first analysis uses the thresholds | `always` (defaults also on restore): the restored track differs; `session-loses` (defaults overwrite the settings of the archive): the stored note is lost |
 | `defaults-hostile` | each hostile file gives the built-in value of the bad field, the good fields stay, ONE `defaults_invalid` row per load, the plugin runs on | `trust`: no range check; the note 300 reaches the record |
 | `defaults-real-path` | gate build without `DS_ARA_USER_DIR`: row `defaults_path_refused`, 0 files and 0 folders | `real-path`: the path resolves below `HOME`; the folder appears |
 | `defaults-writers` | six host processes and eight threads save roles in a loop; every read in between parses; at the end the file is valid and holds the roles of the last writers | `in-place`: the write is not atomic; a reader sees a half file |
@@ -394,3 +394,24 @@ Not built: a stage `editor-defaults` that drives the REAL page in the plugin's w
 commands stubbed; the plugin side of the commands is proved by unit tests and the stages above). The page has no control for the `follow` and `export` parts
 of the file; they are read from a file that the user may edit by hand. The store half of the archive field (`record_page_edit`) has a unit test of the
 state and a restore stage, but no stage that sets an export setting in a page and stores the archive.
+
+## 16. Round 2 (review of de146d6), what changed
+
+- Follow and export defaults (S11, option a): the file reads ONLY `roles`. The parts `follow` and `export` are ignored (kept in the file when the
+  plugin writes it again) because no page control sets them and the seeding of a new document was never built. Sections 3 and 5 describe the idea;
+  this section is what the code does. The ARCHIVE field `export` (section 8) is unchanged.
+- Presets (M1, S4, S5): a save never replaces a file with the same file name but another preset name ("A/B" and "A-B"; two names equal in their
+  first 80 characters are one name). The same name asks first (`exists`), the page asks "Replace the preset <name>?", and only `overwrite: true` writes.
+  A file of a newer version is never replaced. The list shows every file: a second file with the same name (or the name General MIDI) shows its file
+  name in brackets, and delete goes through the same list.
+- Damaged defaults file (M2, S3): a save copies the damaged file first (`defaults.bad.json`, then `.2` to `.5`, never overwriting, by `write_atomic`);
+  a link or a folder is never copied or written through; no free name, too big or a failed write stops the save with a text and writes nothing.
+- Values the document holds (S7, S8, S9): before each round the service gets the settings of the sources that have no track in the project yet, BY
+  SOURCE (creation index): the entries of the restore for sources with no result, and the settings of a source whose record was lost in a round
+  (`forget_track`, called only from the failure paths of `analyse`). Entries of sources that are gone are dropped at each round, so a new source of the
+  same name is a new track and gets the defaults. A source that the DAW removed and made again is a NEW source with no entry (its track left the
+  document at the removal), so it gets the defaults; the plugin cannot know that it is the same clip (an undo of a track delete in the DAW makes a new
+  ARA object). A round may see a source before the restore: the restore then replaces the project and the tracks of the service, and the values it
+  brings win (unit test `a_restore_after_a_first_round_wins...`).
+- Stages added: `editor-defaults` (the command layer; faults `all-roles`, `trust`, `preset-overwrite`), `doc-archive-export-store` (scenario
+  `export-last:<json>`, store, restore in a new process; fault `export-drop`), unit faults `preset-overwrite`, `backup-ignore`, `keep-gone`.

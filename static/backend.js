@@ -340,7 +340,7 @@ function shellMethods(invoke, T) {
     defaultsGet: () => (bridge() ? Promise.resolve(null) : invoke("plugin_defaults_get", {})),
     defaultsSaveRole: (role, notes, params) => invoke("plugin_defaults_save_role", { role, notes, params }),
     defaultsResetRole: role => invoke("plugin_defaults_reset_role", { role }),
-    presetSave: (name, roles) => invoke("plugin_preset_save", { name, roles }),
+    presetSave: (name, roles, overwrite) => invoke("plugin_preset_save", { name, roles, overwrite: !!overwrite }),
     presetDelete: name => invoke("plugin_preset_delete", { name }),
     exportDragTake: (sid, paths) => invoke("export_drag_take", { sid, paths }),   // #433: a drag starts: the files move into Exports/ under their export names; {files}
     /* the native file drag out of the window (tauri-plugin-drag): the files must exist. The test bridge has no native drag: it records

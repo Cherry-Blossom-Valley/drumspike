@@ -124,8 +124,6 @@ pub struct RoleEntry {
 #[derive(Debug, Clone, PartialEq, Default)]
 pub struct Checked {
     pub roles: BTreeMap<String, RoleEntry>,
-    pub follow: Map<String, Value>,
-    pub export: Map<String, Value>,
 }
 
 fn int_in(v: &Value, lo: i64, hi: i64) -> Option<i64> {
@@ -233,55 +231,6 @@ pub fn roles_of(v: &Value, base: &str, bad: &mut Vec<String>) -> BTreeMap<String
     out
 }
 
-fn follow_of(v: &Value, bad: &mut Vec<String>) -> Map<String, Value> {
-    let mut out = Map::new();
-    let Some(m) = v.as_object() else {
-        bad.push("follow".into());
-        return out;
-    };
-    for (k, val) in m {
-        let ok = match k.as_str() {
-            "mode" => val.as_str().is_some_and(|s| ["smooth", "page", "off"].contains(&s)),
-            "suspend_on_edit" | "host_selection" => val.is_boolean(),
-            _ => continue,
-        };
-        if ok {
-            out.insert(k.clone(), val.clone());
-        } else {
-            bad.push(format!("follow.{k}"));
-        }
-    }
-    out
-}
-
-fn export_of(v: &Value, bad: &mut Vec<String>) -> Map<String, Value> {
-    let mut out = Map::new();
-    let Some(m) = v.as_object() else {
-        bad.push("export".into());
-        return out;
-    };
-    for (k, val) in m {
-        let ok = match k.as_str() {
-            "formats" => val.as_array().is_some_and(|a| {
-                let names: Vec<&str> = a.iter().filter_map(Value::as_str).collect();
-                names.len() == a.len()
-                    && !names.is_empty()
-                    && names.iter().all(|n| ["midi", "spikes", "audio"].contains(n))
-                    && names.iter().collect::<HashSet<_>>().len() == names.len()
-            }),
-            "midi_mode" => val.as_str().is_some_and(|s| s == "per_track" || s == "single"),
-            "compensate" => val.is_boolean(),
-            _ => continue,
-        };
-        if ok {
-            out.insert(k.clone(), val.clone());
-        } else {
-            bad.push(format!("export.{k}"));
-        }
-    }
-    out
-}
-
 /// Check the parsed JSON of a defaults file. The names of the bad fields are in `bad`.
 #[must_use]
 pub fn check_defaults(raw: &Value, bad: &mut Vec<String>) -> Checked {
@@ -292,12 +241,6 @@ pub fn check_defaults(raw: &Value, bad: &mut Vec<String>) -> Checked {
     };
     if let Some(r) = m.get("roles") {
         c.roles = roles_of(r, "roles", bad);
-    }
-    if let Some(f) = m.get("follow") {
-        c.follow = follow_of(f, bad);
-    }
-    if let Some(e) = m.get("export") {
-        c.export = export_of(e, bad);
     }
     c
 }
@@ -529,6 +472,54 @@ fn role_json(e: &RoleEntry) -> Value {
     Value::Object(m)
 }
 
+/// The most copies of damaged defaults files that are kept (`defaults.bad.json`, `defaults.bad.2.json` ...).
+pub const MAX_BACKUPS: usize = 5;
+/// The largest damaged file that is copied.
+const BACKUP_BYTES: u64 = 4 * 1024 * 1024;
+
+/// Copy the damaged file `path` to a free backup name in `dir`. A link or a folder is never copied (and so never replaced), an older backup is never
+/// overwritten, the copy is written by `write_atomic`, and when there is no room (all names taken, too big, a failed write) the answer is an error text
+/// and the caller writes nothing.
+fn backup_damaged(dir: &Path, path: &Path) -> Result<(), String> {
+    if fault() == "backup-ignore" {
+        // the fault run: the copy may fail and the save goes on (the old behaviour)
+        let _ = backup_damaged_real(dir, path);
+        return Ok(());
+    }
+    backup_damaged_real(dir, path)
+}
+
+fn backup_damaged_real(dir: &Path, path: &Path) -> Result<(), String> {
+    let refuse = |why: &str| {
+        Err(format!("The defaults file is damaged and the plugin cannot keep a copy of it ({why}). Move the file away, then save again."))
+    };
+    match std::fs::symlink_metadata(path) {
+        Ok(m) if m.is_file() => {
+            if m.len() > BACKUP_BYTES {
+                return refuse("it is too big");
+            }
+        }
+        Ok(_) => return refuse("it is not a plain file"),
+        Err(_) => return Ok(()), // gone meanwhile: nothing to keep
+    }
+    let Ok(bytes) = std::fs::read(path) else {
+        return refuse("it cannot be read");
+    };
+    for n in 1..=MAX_BACKUPS {
+        let name = if n == 1 {
+            "defaults.bad.json".to_string()
+        } else {
+            format!("defaults.bad.{n}.json")
+        };
+        let to = dir.join(name);
+        if std::fs::symlink_metadata(&to).is_ok() {
+            continue; // taken (a file, a link or a folder): never overwritten, never followed
+        }
+        return drumspike_core::io::write_atomic(&to, &bytes).or_else(|e| refuse(&e.to_string()));
+    }
+    refuse(&format!("there are {MAX_BACKUPS} copies of damaged files already"))
+}
+
 /// Read the file now, change ONLY the role (`Some`: set it, `None`: remove it), keep every other field, write atomically.
 ///
 /// # Errors
@@ -547,10 +538,8 @@ pub fn save_role_at(dir: &Path, role: &str, entry: Option<&RoleEntry>) -> Result
     }
     let mut raw = cur.raw;
     if let Status::Damaged(_) = cur.status {
-        // keep the user's text once
-        if path.is_file() {
-            let _ = std::fs::copy(&path, dir.join("defaults.bad.json"));
-        }
+        // keep the user's text first; when that fails nothing is written and the damaged file stays where it is
+        backup_damaged(dir, &path)?;
         raw = Map::new();
     }
     raw.insert("v".into(), json!(VERSION));
@@ -585,31 +574,6 @@ pub fn save_role_at(dir: &Path, role: &str, entry: Option<&RoleEntry>) -> Result
     }
     raw.insert("roles".into(), Value::Object(roles));
     write_json(&path, &Value::Object(raw)).map_err(|e| save_error(&e))
-}
-
-/// Make `s` the content of the `follow` or `export` part of the file (the page has no button for it yet; the file may be edited by hand).
-///
-/// # Errors
-/// As [`save_role_at`].
-pub fn save_part_at(dir: &Path, part: &str, value: Value) -> Result<(), String> {
-    if part != "follow" && part != "export" {
-        return Err(save_error("no such part"));
-    }
-    let _g = WRITE.lock().unwrap_or_else(|e| e.into_inner());
-    let cur = load_at(dir);
-    if cur.status == Status::Newer {
-        return Err(
-            "The defaults file is from a newer version of the plugin. Update the plugin, or move the file.".into(),
-        );
-    }
-    let mut raw = if matches!(cur.status, Status::Damaged(_)) {
-        Map::new()
-    } else {
-        cur.raw
-    };
-    raw.insert("v".into(), json!(VERSION));
-    raw.insert(part.into(), value);
-    write_json(&dir.join("defaults.json"), &Value::Object(raw)).map_err(|e| save_error(&e))
 }
 
 // ---------------------------------------------------------------- presets
@@ -648,7 +612,11 @@ pub fn general_midi() -> Checked {
 /// A preset as the page shows it.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Preset {
+    /// The name as the page shows it: the name inside the file; a second file with the same name (or the name of the built-in preset) shows its file
+    /// name in brackets, so every file is visible and each can be deleted.
     pub name: String,
+    /// The file name below `Presets/` (`None`: the built-in preset).
+    pub file: Option<String>,
     pub builtin: bool,
     pub checked: Checked,
 }
@@ -662,6 +630,7 @@ fn presets_dir(dir: &Path) -> PathBuf {
 pub fn list_at(dir: &Path) -> Vec<Preset> {
     let mut out = vec![Preset {
         name: BUILTIN.into(),
+        file: None,
         builtin: true,
         checked: general_midi(),
     }];
@@ -675,13 +644,21 @@ pub fn list_at(dir: &Path) -> Vec<Preset> {
         .filter(|p| p.extension().is_some_and(|x| x == "json"))
         .collect();
     files.sort();
-    let mut seen = HashSet::new();
+    let mut seen: HashSet<String> = HashSet::new();
+    seen.insert(key_of(BUILTIN));
     for p in files.into_iter().take(MAX_PRESETS) {
-        match read_preset(&p) {
-            Some(pr) if seen.insert(key_of(&pr.name)) && key_of(&pr.name) != key_of(BUILTIN) => out.push(pr),
-            Some(_) => {}
-            None => {}
+        let Some(mut pr) = read_preset(&p) else { continue };
+        let stem = p
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        pr.file = p.file_name().map(|s| s.to_string_lossy().into_owned());
+        if !seen.insert(key_of(&pr.name)) {
+            // the same name as an earlier file (or as the built-in preset): both stay visible, the later one with its file name
+            pr.name = format!("{} [{stem}]", pr.name);
+            seen.insert(key_of(&pr.name));
         }
+        out.push(pr);
     }
     out[1..].sort_by_key(|p| p.name.to_lowercase());
     out
@@ -723,6 +700,7 @@ fn read_preset(path: &Path) -> Option<Preset> {
             }
             Some(Preset {
                 name,
+                file: None,
                 builtin: false,
                 checked: l.checked,
             })
@@ -745,11 +723,34 @@ pub fn get_at(dir: &Path, name: &str) -> Option<Preset> {
         .find(|p| key_of(&p.name) == key_of(name.trim()))
 }
 
-/// Write a preset.
+fn stem_obj(shown: &str, roles: &BTreeMap<String, RoleEntry>) -> Value {
+    let roles_json: Map<String, Value> = roles.iter().map(|(k, v)| (k.clone(), role_json(v))).collect();
+    json!({"v": VERSION, "name": shown, "roles": roles_json})
+}
+
+fn write_json_unchecked(path: &Path, v: &Value) -> Result<(), String> {
+    write_json(path, v).map_err(|e| save_error(&e))
+}
+
+/// What a save of a preset did.
+#[derive(Debug, Clone, PartialEq)]
+pub enum PresetSave {
+    Saved,
+    /// A file of this name exists (the same name): nothing was written; the page asks "Replace the preset ...?" and saves again with `overwrite`.
+    Exists(String),
+}
+
+/// Write a preset. A file that has the same file name but ANOTHER preset name is never replaced; the same name is replaced only with `overwrite`.
 ///
 /// # Errors
-/// The text for the page: a bad or reserved name, too many presets, a failed write.
-pub fn save_preset_at(dir: &Path, name: &str, roles: &BTreeMap<String, RoleEntry>) -> Result<(), String> {
+/// The text for the page: a bad or reserved name, a name that collides with the file of another preset, a file of a newer plugin, too many
+/// presets, a failed write.
+pub fn save_preset_at(
+    dir: &Path,
+    name: &str,
+    roles: &BTreeMap<String, RoleEntry>,
+    overwrite: bool,
+) -> Result<PresetSave, String> {
     let name = name.trim();
     let shown: String = name.chars().take(80).collect();
     let Some(stem) = preset_stem(&shown).filter(|_| !shown.is_empty()) else {
@@ -760,29 +761,53 @@ pub fn save_preset_at(dir: &Path, name: &str, roles: &BTreeMap<String, RoleEntry
     }
     let _g = WRITE.lock().unwrap_or_else(|e| e.into_inner());
     let path = presets_dir(dir).join(format!("{stem}.json"));
-    // a file of another name that has the same stem key is the same file on this file system: refuse a link or a folder at the path
-    if let Ok(m) = std::fs::symlink_metadata(&path) {
-        if !m.is_file() {
-            return Err(save_error("not a plain file"));
-        }
-    } else if std::fs::read_dir(presets_dir(dir)).map_or(0, |r| r.filter_map(Result::ok).count()) >= MAX_PRESETS {
-        return Err(format!("There are {MAX_PRESETS} presets already. Delete one first."));
-    }
     let mut obj = Map::new();
-    // the unknown fields of a file that is written again are kept
-    if let Ok(Some(b)) = read_plain(&path, PRESET_BYTES) {
-        if let Ok(Value::Object(old)) = serde_json::from_slice::<Value>(&b) {
-            obj = old;
+    match std::fs::symlink_metadata(&path) {
+        Ok(m) if !m.is_file() => return Err(save_error("not a plain file")),
+        Ok(_) => {
+            if fault() == "preset-overwrite" {
+                // the fault run: the old behaviour, a file with the same file name is replaced
+                write_json_unchecked(&path, &stem_obj(&shown, roles))?;
+                return Ok(PresetSave::Saved);
+            }
+            let clash = "A preset with this file name exists; choose another name.";
+            let Ok(Some(b)) = read_plain(&path, PRESET_BYTES) else {
+                return Err(clash.into());
+            };
+            let Ok(Value::Object(old)) = serde_json::from_slice::<Value>(&b) else {
+                return Err(clash.into());
+            };
+            if old.get("v").and_then(Value::as_i64).is_some_and(|v| v > VERSION) {
+                return Err(
+                    "That preset is from a newer version of the plugin. Update the plugin, or choose another name."
+                        .into(),
+                );
+            }
+            let old_name = old.get("name").and_then(Value::as_str).unwrap_or("").trim().to_string();
+            if key_of(&old_name) != key_of(&shown) {
+                return Err(clash.into());
+            }
+            if !overwrite {
+                return Ok(PresetSave::Exists(old_name));
+            }
+            obj = old; // the fields this version does not know are kept
+        }
+        Err(_) => {
+            if std::fs::read_dir(presets_dir(dir)).map_or(0, |r| r.filter_map(Result::ok).count()) >= MAX_PRESETS {
+                return Err(format!("There are {MAX_PRESETS} presets already. Delete one first."));
+            }
         }
     }
     obj.insert("v".into(), json!(VERSION));
     obj.insert("name".into(), json!(shown));
     let roles_json: Map<String, Value> = roles.iter().map(|(k, v)| (k.clone(), role_json(v))).collect();
     obj.insert("roles".into(), Value::Object(roles_json));
-    write_json(&path, &Value::Object(obj)).map_err(|e| save_error(&e))
+    write_json(&path, &Value::Object(obj)).map_err(|e| save_error(&e))?;
+    Ok(PresetSave::Saved)
 }
 
-/// Remove a preset file. The built-in preset cannot be removed.
+/// Remove a preset file. The built-in preset cannot be removed. The file is the one the LIST shows for the name (so what the page lists can be
+/// deleted, also a second file with the same inner name), and only a plain file directly in `Presets/` is removed.
 ///
 /// # Errors
 /// The text for the page.
@@ -790,10 +815,13 @@ pub fn delete_preset_at(dir: &Path, name: &str) -> Result<(), String> {
     if key_of(name.trim()) == key_of(BUILTIN) {
         return Err(format!("{BUILTIN} is built in and cannot be deleted."));
     }
-    let Some(stem) = preset_stem(name) else {
+    let Some(file) = get_at(dir, name).and_then(|p| p.file) else {
         return Err("No such preset.".into());
     };
-    let path = presets_dir(dir).join(format!("{stem}.json"));
+    if file.contains('/') || file.contains('\\') {
+        return Err("No such preset.".into());
+    }
+    let path = presets_dir(dir).join(file);
     match std::fs::symlink_metadata(&path) {
         Ok(m) if m.is_file() => {
             std::fs::remove_file(&path).map_err(|e| format!("The preset could not be deleted: {e}"))
@@ -826,7 +854,7 @@ mod tests {
         write(
             &d,
             r#"{"v":1,"roles":{"snare":{"note":40,"params":{"min_gap_ms":30,"refine":false,"vel_lo_db":-50,"vel_hi_db":-10}},
-                "tom":{"notes":[50,48,47]}},"follow":{"mode":"page","suspend_on_edit":true},"export":{"formats":["midi"],"midi_mode":"single","compensate":false}}"#,
+                "tom":{"notes":[50,48,47]}},"follow":{"mode":"page"},"export":{"formats":["midi"]}}"#,
         );
         let l = load_at(&d);
         assert_eq!(l.status, Status::Ok);
@@ -834,8 +862,10 @@ mod tests {
         assert_eq!(l.checked.roles["snare"].notes, [40]);
         assert_eq!(l.checked.roles["tom"].notes, [50, 48, 47]);
         assert_eq!(l.checked.roles["snare"].params["min_gap_ms"], 30);
-        assert_eq!(l.checked.follow["mode"], "page");
-        assert_eq!(l.checked.export["midi_mode"], "single");
+        assert!(
+            l.raw.contains_key("follow") && l.raw.contains_key("export"),
+            "the parts this version does not use stay in the raw file"
+        );
     }
 
     #[test]
@@ -881,8 +911,7 @@ mod tests {
         for r in ["snare", "tom", "hat", "cymbal", "other", "bogus"] {
             assert!(!l.checked.roles.contains_key(r), "{r}");
         }
-        assert!(l.checked.follow.is_empty() && l.checked.export.is_empty());
-        assert!(l.bad.len() >= 9, "{:?}", l.bad);
+        assert!(l.bad.len() >= 6, "{:?}", l.bad);
     }
 
     #[test]
@@ -1062,17 +1091,20 @@ mod tests {
         assert_eq!(list[0].checked.roles["tom"].notes, [50, 48, 47, 45, 43, 41]);
         assert!(!list[0].checked.roles.contains_key("other"));
         for name in ["General MIDI", "general midi", " GENERAL MIDI "] {
-            let e = save_preset_at(&d, name, &BTreeMap::new()).unwrap_err();
+            let e = save_preset_at(&d, name, &BTreeMap::new(), false).unwrap_err();
             assert!(e.contains("built in"), "{name}: {e}");
         }
         assert!(delete_preset_at(&d, BUILTIN).is_err());
-        // a file that shadows it is not listed
+        // a file that has its name is listed too, with its file name in brackets, and it can be deleted
         std::fs::create_dir_all(d.join("Presets")).unwrap();
         std::fs::write(
             d.join("Presets/gm.json"),
             r#"{"v":1,"name":"General MIDI","roles":{"kick":{"note":1}}}"#,
         )
         .unwrap();
+        let names: Vec<String> = list_at(&d).into_iter().map(|p| p.name).collect();
+        assert_eq!(names, [BUILTIN, "General MIDI [gm]"]);
+        delete_preset_at(&d, "General MIDI [gm]").unwrap();
         assert_eq!(list_at(&d).len(), 1);
     }
 
@@ -1087,8 +1119,8 @@ mod tests {
                 params: Map::new(),
             },
         );
-        assert!(save_preset_at(&d, "  ", &roles).is_err());
-        save_preset_at(&d, "My Kit/../x", &roles).unwrap();
+        assert!(save_preset_at(&d, "  ", &roles, false).is_err());
+        assert_eq!(save_preset_at(&d, "My Kit/../x", &roles, false), Ok(PresetSave::Saved));
         let files: Vec<_> = std::fs::read_dir(d.join("Presets"))
             .unwrap()
             .filter_map(Result::ok)
@@ -1137,7 +1169,7 @@ mod tests {
             .unwrap();
         }
         assert_eq!(list_at(&d).len(), 1 + MAX_PRESETS);
-        let e = save_preset_at(&d, "one more", &BTreeMap::new()).unwrap_err();
+        let e = save_preset_at(&d, "one more", &BTreeMap::new(), false).unwrap_err();
         assert!(e.contains("200"), "{e}");
     }
 
@@ -1150,6 +1182,177 @@ mod tests {
                 assert_ne!(&d, r, "a test build must not point at the real folder");
             }
         }
+    }
+
+    fn kick() -> BTreeMap<String, RoleEntry> {
+        BTreeMap::from([(
+            "kick".to_string(),
+            RoleEntry {
+                notes: vec![35],
+                params: Map::new(),
+            },
+        )])
+    }
+
+    #[test]
+    fn a_name_whose_file_name_is_taken_by_another_preset_is_refused_and_a_replace_needs_the_flag() {
+        let d = scratch("clash");
+        assert_eq!(save_preset_at(&d, "A-B", &kick(), false), Ok(PresetSave::Saved));
+        let before = std::fs::read(d.join("Presets/A-B.json")).unwrap();
+        // "A/B" has the same file name as "A-B": refused, the file is as it was
+        let e = save_preset_at(&d, "A/B", &BTreeMap::new(), true).unwrap_err();
+        assert!(e.contains("file name exists"), "{e}");
+        assert_eq!(std::fs::read(d.join("Presets/A-B.json")).unwrap(), before);
+        // two long names that share the first 80 bytes
+        let long: String = "x".repeat(80);
+        assert_eq!(
+            save_preset_at(&d, &format!("{long}1"), &kick(), false),
+            Ok(PresetSave::Saved)
+        );
+        // the names are cut at 80 characters: the second is the same name, so it asks before it replaces
+        assert_eq!(
+            save_preset_at(&d, &format!("{long}2"), &kick(), false),
+            Ok(PresetSave::Exists(long.clone()))
+        );
+        // the same name again: nothing is written without the flag, the flag replaces
+        assert_eq!(
+            save_preset_at(&d, "a-b", &BTreeMap::new(), false),
+            Ok(PresetSave::Exists("A-B".into()))
+        );
+        assert_eq!(std::fs::read(d.join("Presets/A-B.json")).unwrap(), before);
+        assert_eq!(save_preset_at(&d, "a-b", &BTreeMap::new(), true), Ok(PresetSave::Saved));
+        assert_ne!(std::fs::read(d.join("Presets/A-B.json")).unwrap(), before);
+    }
+
+    #[test]
+    fn a_preset_of_a_newer_version_or_a_link_is_never_replaced() {
+        let d = scratch("newer-preset");
+        std::fs::create_dir_all(d.join("Presets")).unwrap();
+        let text = r#"{"v":2,"name":"Future","roles":{}}"#;
+        std::fs::write(d.join("Presets/Future.json"), text).unwrap();
+        let e = save_preset_at(&d, "Future", &kick(), true).unwrap_err();
+        assert!(e.contains("newer version"), "{e}");
+        assert_eq!(std::fs::read_to_string(d.join("Presets/Future.json")).unwrap(), text);
+        std::fs::write(d.join("real.txt"), "keep").unwrap();
+        std::os::unix::fs::symlink(d.join("real.txt"), d.join("Presets/Linked.json")).unwrap();
+        assert!(save_preset_at(&d, "Linked", &kick(), true).is_err());
+        assert_eq!(std::fs::read_to_string(d.join("real.txt")).unwrap(), "keep");
+    }
+
+    #[test]
+    fn two_files_with_one_name_are_both_listed_and_each_can_be_deleted() {
+        let d = scratch("twins");
+        let p = d.join("Presets");
+        std::fs::create_dir_all(&p).unwrap();
+        for f in ["a.json", "b.json"] {
+            std::fs::write(p.join(f), r#"{"v":1,"name":"Twin","roles":{"kick":{"note":35}}}"#).unwrap();
+        }
+        let names: Vec<String> = list_at(&d).into_iter().map(|x| x.name).collect();
+        assert_eq!(names, [BUILTIN, "Twin", "Twin [b]"]);
+        delete_preset_at(&d, "Twin [b]").unwrap();
+        assert!(p.join("a.json").exists() && !p.join("b.json").exists());
+        delete_preset_at(&d, "Twin").unwrap();
+        assert_eq!(list_at(&d).len(), 1);
+        // a preset that was just saved is listed, whatever the folder holds
+        save_preset_at(&d, "Fresh", &kick(), false).unwrap();
+        assert!(list_at(&d).iter().any(|x| x.name == "Fresh"));
+    }
+
+    #[test]
+    fn a_failed_backup_stops_the_save_and_leaves_the_damaged_file() {
+        let d = scratch("nobackup");
+        write(&d, "damaged text");
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o500)).unwrap();
+        let r = save_role_at(
+            &d,
+            "snare",
+            Some(&RoleEntry {
+                notes: vec![38],
+                params: Map::new(),
+            }),
+        );
+        let writable = std::fs::write(d.join("probe"), b"x").is_ok(); // root ignores the mode
+        std::fs::set_permissions(&d, std::fs::Permissions::from_mode(0o700)).unwrap();
+        if !writable {
+            assert!(r.unwrap_err().contains("cannot keep a copy"));
+            assert_eq!(
+                std::fs::read_to_string(d.join("defaults.json")).unwrap(),
+                "damaged text"
+            );
+        }
+        // the free names run out: the fifth copy is the last, the sixth save is refused and writes nothing
+        let d = scratch("backups");
+        for n in 0..MAX_BACKUPS {
+            write(&d, &format!("damaged {n}"));
+            save_role_at(
+                &d,
+                "snare",
+                Some(&RoleEntry {
+                    notes: vec![38],
+                    params: Map::new(),
+                }),
+            )
+            .unwrap();
+        }
+        assert_eq!(
+            std::fs::read_to_string(d.join("defaults.bad.json")).unwrap(),
+            "damaged 0",
+            "an older copy is never overwritten"
+        );
+        assert_eq!(
+            std::fs::read_to_string(d.join("defaults.bad.5.json")).unwrap(),
+            "damaged 4"
+        );
+        write(&d, "damaged 5");
+        let e = save_role_at(
+            &d,
+            "snare",
+            Some(&RoleEntry {
+                notes: vec![38],
+                params: Map::new(),
+            }),
+        )
+        .unwrap_err();
+        assert!(e.contains("5 copies"), "{e}");
+        assert_eq!(std::fs::read_to_string(d.join("defaults.json")).unwrap(), "damaged 5");
+    }
+
+    #[test]
+    fn a_damaged_file_that_is_a_link_is_never_copied_or_written_through() {
+        let d = scratch("linkbad");
+        std::fs::write(d.join("target.txt"), "private").unwrap();
+        std::os::unix::fs::symlink(d.join("target.txt"), d.join("defaults.json")).unwrap();
+        let e = save_role_at(
+            &d,
+            "snare",
+            Some(&RoleEntry {
+                notes: vec![38],
+                params: Map::new(),
+            }),
+        )
+        .unwrap_err();
+        assert!(e.contains("not a plain file"), "{e}");
+        assert!(!d.join("defaults.bad.json").exists());
+        assert_eq!(std::fs::read_to_string(d.join("target.txt")).unwrap(), "private");
+        // a backup name that is a link is skipped, not written through
+        std::fs::remove_file(d.join("defaults.json")).unwrap();
+        write(&d, "damaged");
+        std::os::unix::fs::symlink(d.join("target.txt"), d.join("defaults.bad.json")).unwrap();
+        save_role_at(
+            &d,
+            "snare",
+            Some(&RoleEntry {
+                notes: vec![38],
+                params: Map::new(),
+            }),
+        )
+        .unwrap();
+        assert_eq!(std::fs::read_to_string(d.join("target.txt")).unwrap(), "private");
+        assert_eq!(
+            std::fs::read_to_string(d.join("defaults.bad.2.json")).unwrap(),
+            "damaged"
+        );
     }
 
     /// One process of the stage `defaults-writers` (and the control of `defaults-standalone-control`): saves roles in the folder of
