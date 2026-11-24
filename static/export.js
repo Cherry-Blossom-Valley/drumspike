@@ -197,6 +197,7 @@ function exHostNote() {
 /* #589 round 2: in a DAW the plan call of a change waits 150 ms: a burst of changes (the options, the states of the plugin) makes ONE call, the newest wins. */
 function exInfo() {
   if (!hostMode()) return exInfoRun();
+  if (EX.infoNow) { EX.infoNow = false; return exInfoRun(); }   // the dialog just opened: the first call is not delayed
   clearTimeout(EX.infoTimer);
   return new Promise(ok => { EX.infoTimer = setTimeout(() => ok(exInfoRun()), 150); });
 }
@@ -300,6 +301,7 @@ async function openExport(scope, track) {
     }
   }
   EX.open = true; EX.destOpen = false;   // #575: a DAW starts with the destination row collapsed
+  EX.infoNow = true;
   $("#exportModal").classList.remove("hidden");
   document.addEventListener("keydown", exKey, true);
   exChanged();
