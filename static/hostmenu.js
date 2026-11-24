@@ -40,7 +40,9 @@ const HM_NEEDS = { undo: "undo", redo: "redo", delete_hit: "selHit", nudge_earli
 const HM = { open: false, group: null, level: 0, saved: null };
 /* #562: the items that only the host mode has. The app menu has none of them, so they are not in the command table, the model and the
    audit never see them; the panel adds them at the end of the group. */
-const HM_EXTRA = [{ id: "host_follow_selection", group: "View", title: "Follow the DAW Selection", checked: () => DSHostSel.follows(), run: () => DSHostSel.setFollow(!DSHostSel.follows()) }];
+const HM_EXTRA = [{ id: "host_load_preset", group: "Track", title: "Load Preset…", action: true, enabled: () => !!S.sid, run: () => DSHostDefaults.openLoad() },   /* #577: the presets of the plugin (an action, no check mark) */
+  { id: "host_save_preset", group: "Track", title: "Save Preset…", action: true, enabled: () => !!S.sid, run: () => DSHostDefaults.openSave() },
+  { id: "host_follow_selection", group: "View", title: "Follow the DAW Selection", checked: () => DSHostSel.follows(), run: () => DSHostSel.setFollow(!DSHostSel.follows()) }];
 
 /* The entries of the panel: [{name, items: [{id, title, keys, check, checked, enabled, sub, arg}]}], one group per menu of the
    app (the first part of the path), the items in the order of the table, a submenu as the heading `sub` on its items. */
@@ -107,10 +109,11 @@ function hmRender(groupName) {   // level 0: the menus; level 1: the items of on
   p.appendChild(back);
   /* #562: the host-only items come first in the group, so the last item of a group stays the last item of the table */
   for (const x of HM_EXTRA.filter(e => e.group === groupName)) {
-    const b = hmEl("button", "hmItem", ""); b.type = "button"; b.tabIndex = -1; b.setAttribute("role", "menuitemcheckbox"); b.dataset.host = x.id;
-    b.setAttribute("aria-checked", String(x.checked()));
-    b.appendChild(hmEl("span", "hmMark", x.checked() ? "✓" : "")); b.appendChild(hmEl("span", "hmTitle", x.title)); b.appendChild(hmEl("span", "hmKeys", ""));
-    b.onclick = () => { hostMenuClose(true); x.run(); };
+    const b = hmEl("button", "hmItem", ""); b.type = "button"; b.tabIndex = -1; b.setAttribute("role", x.action ? "menuitem" : "menuitemcheckbox"); b.dataset.host = x.id;
+    if (!x.action) b.setAttribute("aria-checked", String(x.checked()));
+    if (x.enabled && !x.enabled()) b.setAttribute("aria-disabled", "true");
+    b.appendChild(hmEl("span", "hmMark", !x.action && x.checked() ? "✓" : "")); b.appendChild(hmEl("span", "hmTitle", x.title)); b.appendChild(hmEl("span", "hmKeys", ""));
+    b.onclick = () => { if (x.enabled && !x.enabled()) return; hostMenuClose(true); x.run(); };
     p.appendChild(b);
   }
   let sub;
@@ -150,7 +153,8 @@ function hmRefresh() {
   }
   for (const x of HM_EXTRA.filter(e => e.group === HM.group)) {
     const b = HM.panel.querySelector(`[data-host="${x.id}"]`);
-    if (b) { b.setAttribute("aria-checked", String(x.checked())); b.querySelector(".hmMark").textContent = x.checked() ? "✓" : ""; }
+    if (b && x.action) { if (x.enabled && !x.enabled()) b.setAttribute("aria-disabled", "true"); else b.removeAttribute("aria-disabled"); }
+    else if (b) { b.setAttribute("aria-checked", String(x.checked())); b.querySelector(".hmMark").textContent = x.checked() ? "✓" : ""; }
   }
 }
 function hostMenuOpen() {

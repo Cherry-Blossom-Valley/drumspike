@@ -782,6 +782,7 @@ function rulerDown(ev) {   // the time ruler and the Bars|Beats ruler (P4-8): a 
   editInit({ pushEvents, voidHitDrag: name => { if (hitDrag && hitDrag.track === name) hitDrag = null; } });   // R17 step 3: edit.js flushes the writes of other steps through the injected hook; voidHitDrag is the input layer's (a replaced hit list voids an in-flight drag)
   sessionInit({ GLQ, lnReset, auReset, tmLoad, selMem: () => selMem, setSelMem: v => { selMem = v; }, exTempoReset: () => { EX.tempoAck = false; } });   // R17 step 6: session.js resets the module state of the owners a load replaces (the GL tile queue, LN/AU/TM, the selection memory) through the injected hooks; #151: the default-tempo answer is per project
   hostMenuInit();   // #559: the menu button of the host mode (returns at once with the mode off)
+  hostDefaultsInit();   // #577: the user defaults of the plugin (returns at once with the mode off)
   hostSelInit();   // #562: the follow of the DAW selection (returns at once with the mode off)
   DLV.init();   // #576: the drag handles of the DAW (returns at once with the mode off)
   HT.init();   // #555: the rows of the DAW tracks in song time (returns at once with the mode off)

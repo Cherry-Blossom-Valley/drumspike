@@ -327,7 +327,9 @@ pub fn fingerprint(row: &RowIn, kind: Kind, name: &str, tempo_key: &str, bump: u
         }
     }
     if kind == Kind::Midi {
-        (row.note, tempo_key).hash(&mut h);
+        // #577: the note of the row is an input of the MIDI file (fault `fp-no-note`: it is not, so a Load Preset leaves the old file ready)
+        let note = if has("fp-no-note") { 0 } else { row.note };
+        (note, tempo_key).hash(&mut h);
     }
     h.finish()
 }
@@ -1653,6 +1655,50 @@ mod tests {
         note.note = 40;
         assert_ne!(fp(&note, Kind::Midi, "t"), m0, "the note");
         assert_ne!(fingerprint(&base, Kind::Midi, "B", "t", 0), m0, "the stem");
+    }
+
+    /// #577: a note that a preset or a new default sets makes the MIDI set of the row and the merged set stale; the spike sets do not read it; and
+    /// the export settings are no input of any set (the preparation reads none of them).
+    #[test]
+    fn a_changed_note_makes_the_midi_and_merged_sets_stale_and_the_export_settings_make_nothing() {
+        let base = row(
+            "q1",
+            "A",
+            vec![clip("x", 0.0, 2.0, 0.0, 1.0)],
+            vec![src("x", &[0.5], 48_000)],
+        );
+        let mut other = base.clone();
+        other.note = 40;
+        let fp = |r: &RowIn, k: Kind| fingerprint(r, k, "A", "t", 0);
+        assert_ne!(
+            fp(&other, Kind::Midi),
+            fp(&base, Kind::Midi),
+            "the MIDI set of the row is stale"
+        );
+        assert_eq!(
+            fp(&other, Kind::Spike),
+            fp(&base, Kind::Spike),
+            "the spike set does not read the note"
+        );
+        assert_eq!(fp(&other, Kind::Audio), fp(&base, Kind::Audio));
+        // the merged set hashes the MIDI fingerprint of every row (see `fps`)
+        let merged = |rows: &[&RowIn]| {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            for r in rows {
+                fp(r, Kind::Midi).hash(&mut h);
+            }
+            h.finish()
+        };
+        assert_ne!(merged(&[&other]), merged(&[&base]), "the merged set is stale");
+        // the export settings: no source of the preparation names them
+        let src_text = include_str!("prepare.rs");
+        for needle in [
+            concat!("export", "_last"),
+            concat!("export", "_compensate"),
+            concat!("midi", "_mode"),
+        ] {
+            assert_eq!(src_text.matches(needle).count(), 0, "the preparation names {needle}");
+        }
     }
 
     #[test]

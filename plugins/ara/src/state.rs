@@ -91,6 +91,15 @@ pub struct ArchiveState {
     /// The notes of every source.
     #[serde(default)]
     pub sources: Vec<ArchiveSource>,
+    /// M1d3 (#577): the export settings of the document (`formats`, `midi_mode`, `compensate`). Optional in both directions and
+    /// read leniently (a value of another type is "none"); the version stays 1. `scope`, `track` and `dest` are never stored.
+    /// Absent in an archive of an earlier plugin: the restore then keeps what the document holds, as before.
+    #[serde(
+        default,
+        deserialize_with = "lenient_map",
+        skip_serializing_if = "serde_json::Map::is_empty"
+    )]
+    pub export: serde_json::Map<String, serde_json::Value>,
 }
 
 /// Serialise the state.
@@ -132,6 +141,7 @@ mod tests {
             archive_id: "com.cherryblossomvalley.drumspike.ara.archive.v1".into(),
             doc_id: "0123456789abcdef".into(),
             events,
+            export: serde_json::Map::new(),
             sources: vec![ArchiveSource {
                 persistent_id: "id-1".into(),
                 name: "kick.wav".into(),
@@ -197,6 +207,7 @@ mod tests {
             archive_id: "x".into(),
             doc_id: "abc".into(),
             events: serde_json::Map::new(),
+            export: serde_json::Map::new(),
             sources: vec![ArchiveSource {
                 persistent_id: "p".into(),
                 name: "kick.wav".into(),
@@ -242,6 +253,7 @@ mod tests {
             archive_id: "x".into(),
             doc_id: "abc".into(),
             events: serde_json::Map::new(),
+            export: serde_json::Map::new(),
             sources: vec![ArchiveSource {
                 persistent_id: "p".into(),
                 name: "snare.wav".into(),
@@ -261,6 +273,37 @@ mod tests {
             (1, "snare.wav", 1)
         );
         assert_eq!(decode(&bytes).unwrap(), state, "and the new reader round-trips it");
+    }
+
+    #[test]
+    fn the_export_settings_round_trip_and_an_old_or_damaged_archive_loads() {
+        let text = r#"{"version":1,"archive_id":"x","events":{},"sources":[],"export":{"formats":["midi"],"midi_mode":"single","compensate":false,"future":1},"later":{"a":1}}"#;
+        let st = decode(text.as_bytes()).unwrap();
+        assert_eq!(st.export["midi_mode"], "single");
+        let back = decode(&encode(&st)).unwrap();
+        assert_eq!(back, st);
+        assert!(
+            !String::from_utf8(encode(&st)).unwrap().contains("later"),
+            "a field we do not know is not written back (the rule of the archive)"
+        );
+        // an archive without the field restores as today and writes none
+        let old = decode(br#"{"version":1,"archive_id":"x","events":{},"sources":[]}"#).unwrap();
+        assert!(old.export.is_empty());
+        assert!(!String::from_utf8(encode(&old)).unwrap().contains("export"));
+        for bad in ["null", "[1]", "\"x\"", "7"] {
+            let t = format!(r#"{{"version":1,"archive_id":"x","events":{{"k":[]}},"sources":[],"export":{bad}}}"#);
+            let st = decode(t.as_bytes()).unwrap_or_else(|e| panic!("{bad}: {e}"));
+            assert!(st.export.is_empty() && st.events.len() == 1, "{bad}");
+        }
+        // a reader of an earlier plugin loads it
+        #[derive(serde::Deserialize)]
+        struct Old {
+            version: i64,
+        }
+        let o: Old = serde_json::from_str(text).unwrap();
+        assert_eq!(o.version, 1);
+        // a newer version is still refused
+        assert!(decode(br#"{"version":2,"archive_id":"x","export":{}}"#).is_err());
     }
 
     #[test]

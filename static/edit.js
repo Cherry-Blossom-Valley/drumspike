@@ -67,6 +67,7 @@ function undoMeta(op) {
     case "learn": set("Learn Change", at(op.track, null)); break;
     case "group": { const f = op.steps[0]; undoMeta(f); set(op.label || f.label || "Edit", f.where); break; }   // #555: one step of a DAW track that holds the steps of its sources
     case "trkdel": set(`Remove Track ${trackLabel(op.name)}`, at(op.name, null)); break;
+    case "note": set("Set MIDI Note", at(op.track, null)); break;   // #577: a note step of Load Preset (host mode only)
     case "role": set(`Set Role (${trackLabel(op.track)})`, at(op.track, null)); break;
     case "tempo": set(/^bar 1/.test(op.what || "") ? "Set Bar 1" : op.what ? op.what.charAt(0).toUpperCase() + op.what.slice(1) : "Tempo Map Change", at(null, null)); break;
     case "vel": {
@@ -77,6 +78,14 @@ function undoMeta(op) {
     default: set("Edit", at(null, null));
   }
   return op;
+}
+async function noteApplyOp(op, reverse) {   // #577: the undo and the redo of a note that Load Preset set
+  if (op.sid !== S.sid) { setMsg("that project is not the open one"); return false; }
+  const n = reverse ? op.before : op.after;
+  try { await B.setNote(op.sid, op.track, n); } catch (e) { setMsg(`note failed: ${errText(e)}`, "error"); return false; }
+  if (S.tracks[op.track]) { S.tracks[op.track].note = n; refreshHeadNote(op.track); if (INS.name === op.track) syncInspector(true); }
+  setDirtyState(true);
+  return true;
 }
 function opWhere(op, isUndo) { return op.type === "move" && isUndo ? { track: op.track, t: op.from } : (op.where || { track: null, t: null }); }
 function stepText(op, isUndo) {   // "Delete Hit (s top, 12.345 s)"
@@ -111,6 +120,7 @@ function applyOp(op, reverse) {   // a step of the service (shift, add, del, mov
   if (op.type === "tempo") { tmApplyOp(op, reverse); return; }   // P4-8: a change of the tempo and meter map
   if (op.type === "loud") { hgApplyLoudOp(op, reverse); return; }   // P4-3: the loudness histogram (floor, ceiling, cut)
   if (op.type === "trkdel") return trApplyOp(op, reverse);   // P4-39a: Track > Remove Track
+  if (op.type === "note") return noteApplyOp(op, reverse);   // #577: Load Preset (host mode only)
   if (op.type === "role") return roleApplyOp(op, reverse);   // 0.9.1: the role of a track (Inspector)
   if (op.type === "shift") return shiftApplyOp(op, reverse);   // P4-9: the Hitpoint shift
   if (op.type === "params") { hgApplyParamsOp(op, reverse); return; }   // #232: a stored detection setting (the refine window)

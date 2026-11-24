@@ -231,6 +231,34 @@ ABSENT = [1.5, 2.6]
 FILES = [name for name, *_ in SPEC]
 
 
+USER_DIR_NONE = "<none>"
+
+
+def is_host_command(cmd: list) -> bool:
+    """True for the ara-host binary however it is named: the same path, the same file after the links are resolved, or the same file name."""
+    if not cmd:
+        return False
+    c = str(cmd[0])
+    try:
+        return c == str(HOST) or Path(c).resolve() == Path(HOST).resolve() or Path(c).name == Path(HOST).name
+    except OSError:
+        return Path(c).name == Path(HOST).name
+
+
+def guard_user_dir(cmd: list, e: dict, log: str | None) -> None:
+    """#577: a run never reaches the real folder of the user defaults. Every host process gets `DS_ARA_USER_DIR` below out/ (one folder per log name);
+    the value USER_DIR_NONE leaves it unset (the stage `defaults-real-path`). A value outside out/ is refused for ANY command that carries it (the host,
+    cargo, a script), however the host is started."""
+    if is_host_command(cmd):
+        if e.get("DS_ARA_USER_DIR") == USER_DIR_NONE:
+            e.pop("DS_ARA_USER_DIR")
+        elif not e.get("DS_ARA_USER_DIR"):
+            e["DS_ARA_USER_DIR"] = str(OUT / ("user-" + (log or "run").replace("/", "-")))
+    d = e.get("DS_ARA_USER_DIR")
+    if d and not Path(d).resolve().is_relative_to(OUT.resolve()):
+        raise AssertionError(f"a run would use {d} as the folder of the user defaults: outside {OUT}")
+
+
 def run(
     cmd: list, env: dict | None = None, log: str | None = None, cwd: Path | None = None, timeout: int = 1800,
 ) -> tuple[int, str]:
@@ -243,6 +271,7 @@ def run(
                 e.pop(k, None)
             else:
                 e[k] = v
+    guard_user_dir(cmd, e, log)
     try:
         p = subprocess.run(cmd, capture_output=True, text=True, env=e, timeout=timeout, cwd=cwd)
     except subprocess.TimeoutExpired:
@@ -1764,7 +1793,8 @@ def check_home(label: str, home: Path, cache: Path) -> tuple[bool, str]:
     """The files written below `home` outside `cache`: 0. The files inside the cache and
     the service home inside it (with its recent list) make the check non-vacuous."""
     below = [p for p in home.rglob("*") if p.is_file()] if home.is_dir() else []
-    outside = [p for p in below if cache not in p.parents]
+    allowed = home / "Library" / "Application Support" / "DrumSpike ARA"   # #577: the one other folder the plugin may write (the first Save only)
+    outside = [p for p in below if cache not in p.parents and allowed not in p.parents]
     inside = [p for p in below if cache in p.parents]
     jobs = job_rows(label)
     svc_home = Path(jobs[-1].get("service_home", "")) if jobs else Path("")
@@ -8302,6 +8332,428 @@ def stage_drag_source_fault() -> bool:
     return pass_fail("drag-source-fault", not ok, f"the fault run (a second call of the system drag in editor.rs) fails the source check: {ev}")
 
 
+
+# ---------------------------------------------------------------- #577 (M1d3): the user defaults and presets of the plugin
+#
+# Every host process of these stages gets its own `DS_ARA_USER_DIR` below out/ (guard_user_dir); a stage that would reach the real folder
+# fails before it starts. The cargo unit tests are the stage `crate`; the page is proved by tests/e2e_app/test_host_defaults.py.
+
+DEFAULTS_KICK = "m1a_kick_48k_mono"
+DEFAULTS_FILE = {
+    "v": 1,
+    "roles": {
+        "kick": {"notes": [35]},
+        "snare": {"note": 41, "params": {"min_gap_ms": 33}},
+        "tom": {"notes": [50, 48]},
+    },
+}
+
+
+def plant_defaults(label: str, content) -> Path:
+    """The folder of the user defaults of one run (below out/), with `defaults.json` made from `content` (a text or an object)."""
+    d = OUT / f"user-{label}"
+    if d.exists() or d.is_symlink():
+        shutil.rmtree(d)
+    d.mkdir(parents=True)
+    if content is not None:
+        (d / "defaults.json").write_text(content if isinstance(content, str) else json.dumps(content), encoding="utf-8")
+    return d
+
+
+def defaults_session(label: str, content, extra: dict | None = None) -> tuple[int, dict, list]:
+    """A fresh session of the four fixtures with the defaults of `content`. Returns (rc, tracks of the project document, report rows)."""
+    d = plant_defaults(label, content)
+    rc, _text, _lines = host_run(
+        label, CLAP, ["session", "--files", *fixture_args(FILES), "--wait", HOST_WAIT], f"cache-{label}", extra={"DS_ARA_USER_DIR": str(d), **(extra or {})}
+    )
+    docs = project_docs(f"cache-{label}")
+    return rc, (tracks_of_doc(docs[0]) if len(docs) == 1 else {}), report_rows(label)
+
+
+def role_track(tracks: dict, role: str) -> dict:
+    return next((v for v in tracks.values() if v.get("role") == role), {})
+
+
+def new_track_facts(label: str, extra: dict | None = None) -> tuple[bool, str]:
+    rc, tracks, _rows = defaults_session(label, DEFAULTS_FILE, extra)
+    kick, snare, tom, hat = (role_track(tracks, r) for r in ("kick", "snare", "tom", "hat"))
+    parts = {
+        "rc": rc == 0 and len(tracks) == len(FILES),
+        "kick": kick.get("note") == 35,
+        "snare": snare.get("note") == 41 and (snare.get("params") or {}).get("min_gap_ms") == 33,
+        "tom": tom.get("note") == 50,
+        "hat": hat.get("note") == 42 and (hat.get("params") or {}).get("min_gap_ms") != 33,
+    }
+    bad = [k for k, v in parts.items() if not v]
+    return not bad, (
+        f"rc={rc}, {len(tracks)} tracks: kick note {kick.get('note')} (want 35), snare note {snare.get('note')} min_gap {(snare.get('params') or {}).get('min_gap_ms')} "
+        f"(want 41, 33), tom note {tom.get('note')} (want 50), hat note {hat.get('note')} (want 42, no default); wrong: {bad or 'none'}"
+    )
+
+
+def restored_equals_stored(label: str, archive: Path, extra: dict | None = None) -> tuple[bool, str]:
+    """A restore with a defaults file that would change every role: each restored track equals what the archive stored."""
+    d = plant_defaults(label, {"v": 1, "roles": {r: {"notes": [99], "params": {"min_gap_ms": 99}} for r in ("kick", "snare", "tom", "hat", "cymbal", "other")}})
+    rc, _text, _lines = host_run(
+        label, CLAP, ["restore", "--files", *fixture_args(FILES), "--archive", str(archive)], f"cache-{label}", extra={"DS_ARA_USER_DIR": str(d), **(extra or {})}
+    )
+    docs = project_docs(f"cache-{label}")
+    tracks = tracks_of_doc(docs[0]) if len(docs) == 1 else {}
+    stored = {s["track"]: s.get("settings") or {} for s in json.loads(archive.read_text())["sources"] if s.get("track")}
+    wrong = []
+    for name, st in stored.items():
+        got = tracks.get(name) or {}
+        if got.get("note") != st.get("note") or got.get("role") != st.get("role") or (st.get("params") and got.get("params") != st.get("params")):
+            wrong.append(name)
+    with_settings = sum(1 for st in stored.values() if st.get("note") is not None)
+    return rc == 0 and bool(stored) and with_settings > 0 and not wrong, (
+        f"rc={rc}, {len(stored)} tracks stored ({with_settings} with settings), restored tracks that differ from the archive: {wrong or 'none'}"
+    )
+
+
+def stage_defaults_new_track() -> bool:
+    if not HOST.exists() or not CLAP.exists():
+        return pass_fail("defaults-new-track", False, "no host or no CLAP: run check.sh build first")
+    ok, ev = new_track_facts("defaults-new-track")
+    ok = pass_fail("defaults-new-track", ok, "new tracks start with the notes and settings of the file, a role with no entry keeps the built-in values: " + ev)
+    ok_store, archive, why = archive_store()
+    if not ok_store:
+        return pass_fail("defaults-new-track-restore", False, why)
+    ok2, ev2 = restored_equals_stored("defaults-new-track-restore", archive)
+    return pass_fail("defaults-new-track-restore", ok2, "a restore never reads the file: " + ev2) and ok
+
+
+def stage_defaults_new_track_fault() -> bool:
+    if not HOST.exists() or not CLAP.exists():
+        return pass_fail("defaults-new-track-fault", False, "no host or no CLAP: run check.sh build first")
+    ok_store, archive, why = archive_store()
+    if not ok_store:
+        return pass_fail("defaults-new-track-fault", False, why)
+    res = {}
+    for fault in ("always", "session-loses"):
+        res[fault] = restored_equals_stored(f"defaults-fault-{fault}", archive, {"DS_ARA_DEFAULTS_FAULT": fault})
+    return pass_fail(
+        "defaults-new-track-fault",
+        all(not v[0] for v in res.values()),
+        "the fault runs (a restore applies the defaults; the defaults overwrite the stored settings) were refused by the check: "
+        + "; ".join(f"{k}: {v[1]}" for k, v in res.items()),
+    )
+
+
+HOSTILE_PARTIAL = {"v": 1, "roles": {"kick": {"note": 300}, "snare": {"notes": [41]}, "tom": {"notes": [1, 2, 3, 4, 5, 6, 7, 8, 9]}}, "follow": {"mode": "x"}}
+
+
+def hostile_defaults_run(label: str, how: str, extra: dict | None = None) -> tuple[bool, str]:
+    content = {"not-json": "{{{ not json", "big": json.dumps({"v": 1, "pad": "x" * 300_000}), "partial": HOSTILE_PARTIAL, "link": None}[how]
+    d = OUT / f"user-{label}"
+    if how == "link":
+        content = None
+    rc, tracks, rows = None, {}, []
+    if how == "link":
+        plant_defaults(label, None)
+        (OUT / f"user-{label}" / "real.json").write_text(json.dumps(DEFAULTS_FILE))
+        (OUT / f"user-{label}" / "defaults.json").symlink_to(OUT / f"user-{label}" / "real.json")
+        rc, _t, _l = host_run(label, CLAP, ["session", "--files", *fixture_args(FILES), "--wait", HOST_WAIT], f"cache-{label}", extra={"DS_ARA_USER_DIR": str(d), **(extra or {})})
+        docs = project_docs(f"cache-{label}")
+        tracks, rows = (tracks_of_doc(docs[0]) if len(docs) == 1 else {}), report_rows(label)
+    else:
+        rc, tracks, rows = defaults_session(label, content, extra)
+    kick, snare, tom = (role_track(tracks, r) for r in ("kick", "snare", "tom"))
+    invalid = [r for r in rows if r.get("event") == "defaults_invalid"]
+    leaked = [r for r in invalid if "/" in json.dumps(r) or "Users" in json.dumps(r)]
+    parts = {
+        "rc": rc == 0 and len(tracks) == len(FILES),
+        "kick-built-in": kick.get("note") == 36,
+        "tom-built-in": tom.get("note") == 48,
+        "snare": snare.get("note") == (41 if how == "partial" else 38),
+        "one-row": len(invalid) == 1,
+        "no-path": not leaked,
+    }
+    bad = [k for k, v in parts.items() if not v]
+    return not bad, f"{how}: rc={rc}, kick {kick.get('note')}, snare {snare.get('note')}, tom {tom.get('note')}, {len(invalid)} defaults_invalid row(s); wrong: {bad or 'none'}"
+
+
+def stage_defaults_hostile() -> bool:
+    if not HOST.exists() or not CLAP.exists():
+        return pass_fail("defaults-hostile", False, "no host or no CLAP: run check.sh build first")
+    ok = True
+    for how in ("not-json", "big", "partial", "link"):
+        good, ev = hostile_defaults_run(f"defaults-hostile-{how}", how)
+        ok = pass_fail(f"defaults-hostile-{how}", good, "built-in values for the bad fields, the good ones stay, one report row, the plugin runs on: " + ev) and ok
+    return ok
+
+
+def stage_defaults_hostile_fault() -> bool:
+    if not HOST.exists() or not CLAP.exists():
+        return pass_fail("defaults-hostile-fault", False, "no host or no CLAP: run check.sh build first")
+    good, ev = hostile_defaults_run("defaults-hostile-trust", "partial", {"DS_ARA_DEFAULTS_FAULT": "trust"})
+    return pass_fail("defaults-hostile-fault", not good, f"the fault run (no range check) was refused by the check: {ev}")
+
+
+def real_path_facts(label: str, extra: dict | None = None) -> tuple[bool, str]:
+    home = OUT / f"home-{label}"
+    if home.exists():
+        shutil.rmtree(home)
+    home.mkdir(parents=True)
+    rc, _text, _lines = host_run(
+        label, CLAP, ["session", "--files", *fixture_args(HOME_FILES), "--wait", HOST_WAIT], f"cache-{label}",
+        extra={"HOME": str(home), "DS_ARA_USER_DIR": USER_DIR_NONE, **(extra or {})},
+    )
+    refused = [r for r in report_rows(label) if r.get("event") == "defaults_path_refused"]
+    folder = home / "Library" / "Application Support" / "DrumSpike ARA"
+    made = [str(p.relative_to(home)) for p in home.rglob("*") if "DrumSpike ARA" in str(p)]
+    return rc == 0 and bool(refused) and not made and not folder.exists(), (
+        f"rc={rc}, {len(refused)} defaults_path_refused row(s) (want at least 1), files or folders of the plugin below HOME: {made or 'none'}"
+    )
+
+
+def stage_defaults_real_path() -> bool:
+    if not HOST.exists() or not CLAP.exists():
+        return pass_fail("defaults-real-path", False, "no host or no CLAP: run check.sh build first")
+    ok, ev = real_path_facts("defaults-real-path")
+    ok = pass_fail("defaults-real-path", ok, "a gate build without DS_ARA_USER_DIR has no folder and says so: " + ev)
+    # the guard of the runner: a value outside out/ is refused before a process starts
+    real = str(Path.home() / "Library" / "Application Support" / "DrumSpike ARA")
+    link = OUT / "ara-host-link"
+    if link.is_symlink() or link.exists():
+        link.unlink()
+    link.symlink_to(HOST)
+    refused = {}
+    for how, cmd in (("host path", [str(HOST)]), ("a link to the host", [str(link)]), ("relative host name", ["./" + Path(HOST).name]), ("cargo", ["cargo", "test"])):
+        try:
+            guard_user_dir(cmd, {"DS_ARA_USER_DIR": real}, "x")
+            refused[how] = False
+        except AssertionError:
+            refused[how] = True
+    return pass_fail("defaults-real-path-guard", all(refused.values()), f"the runner refuses a folder of the user defaults outside out/ however the command is written: {refused}") and ok
+
+
+def stage_defaults_real_path_fault() -> bool:
+    if not HOST.exists() or not CLAP.exists():
+        return pass_fail("defaults-real-path-fault", False, "no host or no CLAP: run check.sh build first")
+    ok, ev = real_path_facts("defaults-real-path-fault", {"DS_ARA_DEFAULTS_FAULT": "real-path"})
+    return pass_fail("defaults-real-path-fault", not ok, f"the fault run (the real path resolves; HOME is below out/) was refused by the check: {ev}")
+
+
+def race_workers(label: str, n: int, extra: dict) -> tuple[list, Path]:
+    d = plant_defaults(label, {"v": 1})
+    env = {**os.environ, **no_switch_env(), "DS_ARA_USER_DIR": str(d), "ARA_API_DIR": str(DEPS / "ARA_SDK" / "ARA_API"), "LIBCLANG_PATH": f"{CLT}/usr/lib",
+           "CARGO_TARGET_DIR": str(HERE / "target"), **extra}
+    cmd = ["cargo", "test", "--locked", "--features", "test-switches", "--lib", "race_worker", "--", "--ignored", "--exact", "userdefaults::tests::race_worker"]
+    procs = [subprocess.Popen(cmd, cwd=HERE, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True) for _ in range(n)]
+    outs = [p.communicate(timeout=900)[0] for p in procs]
+    return [(p.returncode, o) for p, o in zip(procs, outs)], d
+
+
+def no_switch_env() -> dict:
+    return {k: v for k, v in os.environ.items() if k not in {e["name"] for e in load_switches() if e["kind"] != "check"}}
+
+
+def writers_facts(label: str, extra: dict) -> tuple[bool, str]:
+    runs, d = race_workers(label, 4, extra)
+    try:
+        v = json.loads((d / "defaults.json").read_text())
+        final = v.get("v") == 1 and bool(v.get("roles"))
+    except (ValueError, OSError):
+        final = False
+    failed = [i for i, (rc, _o) in enumerate(runs) if rc != 0]
+    return not failed and final, f"4 processes of 150 saves each: {len(failed)} saw a half file or failed, the final file is valid JSON with roles: {final}"
+
+
+def stage_defaults_writers() -> bool:
+    ok, ev = writers_facts("defaults-writers", {})
+    return pass_fail("defaults-writers", ok, "last writer wins and no reader sees half a file: " + ev)
+
+
+def stage_defaults_writers_fault() -> bool:
+    ok, ev = writers_facts("defaults-writers-fault", {"DS_ARA_DEFAULTS_FAULT": "in-place"})
+    return pass_fail("defaults-writers-fault", not ok, f"the fault run (the file is written in place) was refused by the check: {ev}")
+
+
+def load_plugin_files():
+    import importlib.util
+
+    spec = importlib.util.spec_from_file_location("plugin_files", HERE.parent.parent / "tests" / "plugin_files.py")
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod
+
+
+def stage_defaults_standalone_control() -> bool:
+    """Gate line 6 (c): the comparison of the standalone test can see a write of the plugin. A plugin process saves roles into the planted folder; the
+    comparison of tests/plugin_files.py must name the change (a control that cannot fire would prove nothing)."""
+    pf = load_plugin_files()
+    d = plant_defaults("defaults-standalone-control", {"v": 1, "roles": {"snare": {"notes": [99]}}})
+    (d / "Presets").mkdir()
+    (d / "Presets" / "Sentinel.json").write_text('{"v":1,"name":"Sentinel","roles":{}}')
+    before = pf.snapshot(d)
+    quiet = pf.changed(before, pf.snapshot(d))
+    env = {**no_switch_env(), "DS_ARA_USER_DIR": str(d), "ARA_API_DIR": str(DEPS / "ARA_SDK" / "ARA_API"), "LIBCLANG_PATH": f"{CLT}/usr/lib", "CARGO_TARGET_DIR": str(HERE / "target")}
+    rc, text = run(["cargo", "test", "--locked", "--features", "test-switches", "--lib", "--", "--ignored", "--exact", "userdefaults::tests::race_worker"], env=env, log="defaults-standalone-control.log", cwd=HERE)
+    seen = pf.changed(before, pf.snapshot(d))
+    return pass_fail(
+        "defaults-standalone-control",
+        rc == 0 and quiet == [] and any(s.endswith("defaults.json") for s in seen),
+        f"nothing touched: {quiet}; after a plugin process saved roles, the comparison names: {seen[:3]} (rc={rc})",
+    )
+
+
+def archive_with_export(label: str, archive: Path, export) -> Path:
+    blob = json.loads(archive.read_text())
+    if export == "keep":
+        pass
+    elif export is None:
+        blob.pop("export", None)
+    else:
+        blob["export"] = export
+    out = OUT / f"{label}.araarchive"
+    out.write_text(json.dumps(blob), encoding="utf-8")
+    return out
+
+
+def export_facts(label: str, archive: Path, export, extra: dict | None = None) -> dict:
+    a = archive_with_export(label, archive, export)
+    rc, _text, _lines = host_run(label, CLAP, ["restore", "--files", *fixture_args(FILES), "--archive", str(a)], f"cache-{label}", extra=extra)
+    docs = project_docs(f"cache-{label}")
+    doc = json.loads(docs[0].read_text()) if len(docs) == 1 else {}
+    return {"rc": rc, "last": doc.get("export_last"), "comp": doc.get("export_compensate"), "rows": report_rows(label)}
+
+
+def stage_doc_archive_export() -> bool:
+    if not HOST.exists() or not CLAP.exists():
+        return pass_fail("doc-archive-export", False, "no host or no CLAP: run check.sh build first")
+    ok_store, archive, why = archive_store()
+    if not ok_store:
+        return pass_fail("doc-archive-export", False, why)
+    good = export_facts("doc-archive-export-good", archive, {"formats": ["midi", "spikes"], "midi_mode": "single", "compensate": False, "dest": "/etc", "scope": "selected", "future": 1})
+    last = good["last"] or {}
+    ok = pass_fail(
+        "doc-archive-export",
+        good["rc"] == 0 and last.get("formats") == ["midi", "spikes"] and last.get("midi_mode") == "single" and last.get("compensate") is False and not last.get("dest") and good["comp"] is False,
+        f"the export settings of the archive are back in the project; dest and scope of the archive are not taken: {last}",
+    )
+    old = export_facts("doc-archive-export-old", archive, None)
+    ok = pass_fail("doc-archive-export-old", old["rc"] == 0 and old["last"] is None, f"an archive without the field restores as today (no export settings invented): {old['last']}") and ok
+    bad = export_facts("doc-archive-export-hostile", archive, {"formats": ["midi", "../../x"], "midi_mode": 7, "compensate": "yes"})
+    refused = [r for r in bad["rows"] if r.get("event") == "restore_refused" and r.get("what") == "export settings"]
+    return pass_fail("doc-archive-export-hostile", bad["rc"] == 0 and bad["last"] is None and len(refused) == 1, f"hostile values are range-checked like a hostile page: nothing set ({bad['last']}), {len(refused)} refusal row(s)") and ok
+
+
+def stage_doc_archive_export_fault() -> bool:
+    if not HOST.exists() or not CLAP.exists():
+        return pass_fail("doc-archive-export-fault", False, "no host or no CLAP: run check.sh build first")
+    ok_store, archive, why = archive_store()
+    if not ok_store:
+        return pass_fail("doc-archive-export-fault", False, why)
+    f = export_facts("doc-archive-export-drop", archive, {"formats": ["midi"], "midi_mode": "single", "compensate": True}, {"DS_ARA_DEFAULTS_FAULT": "export-drop"})
+    return pass_fail("doc-archive-export-fault", f["last"] is None, f"the fault run (the export settings are not restored) was seen by the check: export_last {f['last']}")
+
+
+def unit_with_fault(name: str, filt: str, fault_env: dict) -> tuple[int, str]:
+    env = {**no_switch_env(), "ARA_API_DIR": str(DEPS / "ARA_SDK" / "ARA_API"), "LIBCLANG_PATH": f"{CLT}/usr/lib", "CARGO_TARGET_DIR": str(HERE / "target"), **fault_env}
+    return run(["cargo", "test", "--locked", "--features", "test-switches", "--lib", filt], env=env, log=f"{name}.log", cwd=HERE)
+
+
+def stage_defaults_units() -> bool:
+    """The unit tests of the rules (kept session values, hostile files, the notes of a role, the stale sets after a note) pass."""
+    ok = True
+    for name, filt in (
+        ("kept", "held_without"), ("kept-gone", "the_kept_values_of_a_removed_source"), ("kept-round", "a_source_with_no_result_that_is_not_in_a_round"), ("kept-used", "a_used_entry_is_removed"), ("export-merge", "an_older_read_of_the_export"), ("twin-names", "a_shown_name_that_collides"), ("restore-late", "a_restore_after_a_first_round"),
+        ("userdefaults", "userdefaults"), ("service-defaults", "new_toms"), ("prepare-note", "a_changed_note"),
+    ):
+        rc, text = unit_with_fault(f"defaults-unit-{name}", filt, {})
+        passed = sum(int(m) for m in re.findall(r"test result: ok\. (\d+) passed", text))
+        ok = pass_fail(f"defaults-unit-{name}", rc == 0 and passed > 0, f"cargo test {filt}: rc={rc}, {passed} passed") and ok
+    return ok
+
+
+def stage_defaults_units_fault() -> bool:
+    """Each fault of a unit rule makes its test fail."""
+    ok = True
+    for name, filt, env in (
+        ("kept", "held_without", {"DS_ARA_DEFAULTS_FAULT": "lose-kept"}),
+        ("hostile", "a_hostile_file", {"DS_ARA_DEFAULTS_FAULT": "trust"}),
+        ("one-role", "a_save_changes_one_role", {"DS_ARA_DEFAULTS_FAULT": "all-roles"}),
+        ("note-stale", "a_changed_note", {"DS_ARA_PREPARE_FAULT": "fp-no-note"}),
+        ("preset-clash", "a_name_whose_file_name", {"DS_ARA_DEFAULTS_FAULT": "preset-overwrite"}),
+        ("backup", "a_failed_backup", {"DS_ARA_DEFAULTS_FAULT": "backup-ignore"}),
+        ("kept-gone", "the_kept_values_of_a_removed_source", {"DS_ARA_DEFAULTS_FAULT": "keep-gone"}),
+        ("kept-round", "a_source_with_no_result_that_is_not_in_a_round", {"DS_ARA_DEFAULTS_FAULT": "kept-by-round"}),
+        ("kept-stale", "a_used_entry_is_removed", {"DS_ARA_DEFAULTS_FAULT": "kept-stale"}),
+    ):
+        rc, _text = unit_with_fault(f"defaults-unit-fault-{name}", filt, env)
+        ok = pass_fail(f"defaults-unit-fault-{name}", rc != 0, f"the fault {env} made `cargo test {filt}` fail (rc={rc})") and ok
+    return ok
+
+
+
+def layer_run(label: str, filt: str, fault: dict | None = None, with_dir: bool = True) -> tuple[int, str]:
+    """The unit tests of the command layer (`defaults_command` in editor.rs) with the folder of this run below out/ (S6)."""
+    d = OUT / f"user-{label}"
+    env = {**no_switch_env(), "ARA_API_DIR": str(DEPS / "ARA_SDK" / "ARA_API"), "LIBCLANG_PATH": f"{CLT}/usr/lib", "CARGO_TARGET_DIR": str(HERE / "target"), **(fault or {})}
+    if with_dir:
+        env["DS_ARA_USER_DIR"] = str(d)
+    guard_user_dir(["cargo"], env, label)
+    return run(["cargo", "test", "--locked", "--features", "test-switches", "--lib", filt, "--", "--ignored", "--nocapture"], env=env, log=f"{label}.log", cwd=HERE)
+
+
+def stage_editor_defaults() -> bool:
+    """The commands of the page through the real command layer: get, save a role, a preset, a colliding name (refused, the text reaches the page), delete, a hostile name,
+    and the answer without a folder."""
+    rc, text = layer_run("editor-defaults", "defaults_layer_get_save")
+    # the tests are #[ignore]d outside this stage and refuse to run without the folder: a run without DS_ARA_USER_DIR must FAIL (a filter that cannot fire)
+    rc_none, _t = layer_run("editor-defaults-nodir", "defaults_layer_get_save", with_dir=False)
+    ran = "defaults_layer_get_save_preset_collision_delete_and_hostile_name ... ok" in text
+    ok = pass_fail("editor-defaults-needs-dir", rc_none != 0, f"the same test without DS_ARA_USER_DIR fails, it does not pass early (rc={rc_none})")
+    ok = pass_fail("editor-defaults", rc == 0 and ran, f"get, save role, preset save, collision refused, delete, hostile name `../x`: rc={rc}, the test ran and passed: {ran}") and ok
+    rc2, text2 = layer_run("editor-defaults-nofolder", "defaults_layer_answers", with_dir=False)
+    ran2 = "defaults_layer_answers_without_a_folder_and_never_panics ... ok" in text2
+    return pass_fail("editor-defaults-nofolder", rc2 == 0 and ran2, f"with no folder the page gets `nofolder` and a save says why: rc={rc2}, passed: {ran2}") and ok
+
+
+def stage_editor_defaults_fault() -> bool:
+    ok = True
+    for name, fault, why in (
+        ("all-roles", {"DS_ARA_DEFAULTS_FAULT": "all-roles"}, "Save as default writes every role, so the file holds more than the saved role"),
+        ("trust", {"DS_ARA_DEFAULTS_FAULT": "trust"}, "the range check is off, so a note 300 of a hostile file reaches the page"),
+        ("overwrite", {"DS_ARA_DEFAULTS_FAULT": "preset-overwrite"}, "a colliding file name replaces the other preset without a question"),
+    ):
+        rc, text = layer_run(f"editor-defaults-fault-{name}", "defaults_layer_get_save", fault)
+        ok = pass_fail(f"editor-defaults-fault-{name}", rc != 0 and "panicked" in text, f"the fault {fault} ({why}) made the command-layer test fail (rc={rc})") and ok
+    return ok
+
+
+def export_store_facts(label: str, extra: dict | None = None) -> tuple[bool, str]:
+    """S10: the plugin sets the export settings as the page does (scenario), the archive is stored, and a NEW process restores it."""
+    archive = OUT / f"{label}.araarchive"
+    if archive.exists():
+        archive.unlink()
+    want = {"formats": ["midi", "spikes"], "midi_mode": "single", "compensate": False}
+    rc, _text, _lines = host_run(
+        f"{label}-store", CLAP, ["store", "--files", *fixture_args(FILES), "--archive", str(archive)], f"cache-{label}-store",
+        extra={"DS_ARA_SCENARIO": "export-last:" + json.dumps(want), **(extra or {})},
+    )
+    stored = json.loads(archive.read_text()).get("export") if archive.exists() else None
+    back = export_facts(f"{label}-restore", archive, "keep") if archive.exists() else {"rc": 1, "last": None, "comp": None}
+    last = back["last"] or {}
+    good = rc == 0 and stored == want and back["rc"] == 0 and last.get("formats") == want["formats"] and last.get("midi_mode") == "single" and last.get("compensate") is False
+    return good, f"store rc={rc}, the archive holds export {stored}, a new process restored {last.get('formats')} {last.get('midi_mode')} compensate {last.get('compensate')}"
+
+
+def stage_doc_archive_export_store() -> bool:
+    if not HOST.exists() or not CLAP.exists():
+        return pass_fail("doc-archive-export-store", False, "no host or no CLAP: run check.sh build first")
+    ok, ev = export_store_facts("doc-archive-export-store")
+    return pass_fail("doc-archive-export-store", ok, "an export setting reaches the archive and comes back in a new process: " + ev)
+
+
+def stage_doc_archive_export_store_fault() -> bool:
+    if not HOST.exists() or not CLAP.exists():
+        return pass_fail("doc-archive-export-store-fault", False, "no host or no CLAP: run check.sh build first")
+    ok, ev = export_store_facts("doc-archive-export-store-drop", {"DS_ARA_DEFAULTS_FAULT": "export-drop"})
+    return pass_fail("doc-archive-export-store-fault", not ok, f"the fault run (the store drops the export settings) was refused by the check: {ev}")
+
+
 STAGES = {
     "fixture": stage_fixture,
     "reference": stage_reference,
@@ -8323,6 +8775,23 @@ STAGES = {
     "doc-two": stage_doc_two,
     "doc-two-fault": stage_doc_two_fault,
     "doc-archive": stage_doc_archive,
+    "doc-archive-export": stage_doc_archive_export,
+    "doc-archive-export-fault": stage_doc_archive_export_fault,
+    "defaults-new-track": stage_defaults_new_track,
+    "defaults-new-track-fault": stage_defaults_new_track_fault,
+    "defaults-hostile": stage_defaults_hostile,
+    "defaults-hostile-fault": stage_defaults_hostile_fault,
+    "defaults-real-path": stage_defaults_real_path,
+    "defaults-real-path-fault": stage_defaults_real_path_fault,
+    "defaults-writers": stage_defaults_writers,
+    "defaults-writers-fault": stage_defaults_writers_fault,
+    "defaults-standalone-control": stage_defaults_standalone_control,
+    "editor-defaults": stage_editor_defaults,
+    "editor-defaults-fault": stage_editor_defaults_fault,
+    "doc-archive-export-store": stage_doc_archive_export_store,
+    "doc-archive-export-store-fault": stage_doc_archive_export_store_fault,
+    "defaults-units": stage_defaults_units,
+    "defaults-units-fault": stage_defaults_units_fault,
     "doc-archive-fault": stage_doc_archive_fault,
     "doc-destroy": stage_doc_destroy,
     "doc-destroy-fault": stage_doc_destroy_fault,
@@ -8508,7 +8977,7 @@ ORDER = [
     "fixture", "reference", "tables", "tables-fault", "identity-clap", "identity-vst3", "regions", "archive",
     "archive-paths-fault", "archive-restore-pathname",
     "threads", "doc-service", "doc-service-fault", "doc-tracks", "doc-tracks-fault", "doc-rounds", "doc-rounds-fault", "doc-two", "doc-two-fault",
-    "doc-archive", "doc-archive-fault", "doc-destroy", "doc-destroy-fault", "doc-close", "doc-close-fault", "doc-home", "doc-home-fault",
+    "doc-archive", "doc-archive-fault", "doc-archive-export", "doc-archive-export-fault", "doc-archive-export-store", "doc-archive-export-store-fault", "editor-defaults", "editor-defaults-fault", "defaults-units", "defaults-units-fault", "defaults-new-track", "defaults-new-track-fault", "defaults-hostile", "defaults-hostile-fault", "defaults-real-path", "defaults-real-path-fault", "defaults-writers", "defaults-writers-fault", "defaults-standalone-control", "doc-destroy", "doc-destroy-fault", "doc-close", "doc-close-fault", "doc-home", "doc-home-fault",
     "doc-id-hostile", "doc-id-hostile-fault", "doc-same-id", "doc-same-id-fault", "doc-restore-busy", "doc-restore-busy-fault", "doc-store-window", "doc-store-window-fault", "doc-store-early-fault", "doc-restore-repair", "doc-restore-repair-fault", "doc-readd", "doc-readd-fault", "doc-readd-unknown-fault",
     "doc-retry", "doc-retry-fault", "doc-rerequest", "doc-rerequest-fault", "doc-errors", "doc-errors-fault",
     "doc-regions-change", "doc-regions-change-fault", "doc-panic", "doc-panic-fault",

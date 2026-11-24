@@ -317,6 +317,7 @@ function syncInspector(force) {   // after a change of the selected track (updat
   $("#insParams .insMixSlot").appendChild($("#insMixBox"));
   $("#insParams .bReanalyze").disabled = analysisRunning;
   insFlags();
+  if (hostMode()) hdInspectorSync();   // #577: Save as default and Reset to default for the role of the row (host mode only)
   insSecApply();   // P4-25: open state per section, summaries
   for (const el of document.querySelectorAll("#inspector .mslider")) el._show();
 }

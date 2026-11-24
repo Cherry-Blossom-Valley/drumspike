@@ -678,8 +678,13 @@ fn poll_channel(sh: &Arc<Shared>, id: &str, total: std::time::Duration) -> Vec<V
 
 /// The commands that `call::run` leaves to the desktop shell (`SHELL_ONLY` of
 /// `crates/app/src/call.rs`), plus the one command of the drag plugin. Each has an answer.
-const SHELL_COMMANDS: [&str; 40] = [
+const SHELL_COMMANDS: [&str; 45] = [
     "plugin_report",
+    "plugin_defaults_get",
+    "plugin_defaults_save_role",
+    "plugin_defaults_reset_role",
+    "plugin_preset_save",
+    "plugin_preset_delete",
     "plugin_pick_folder",
     "plugin_host_tempo",
     "plugin_host_selection",
@@ -904,6 +909,102 @@ fn writes_outside(cmd: &str, args: &Value) -> bool {
         .any(|k| args.get(k).and_then(Value::as_str).is_some_and(|s| !s.is_empty()))
 }
 
+fn roles_json(c: &crate::userdefaults::Checked) -> Value {
+    let m: serde_json::Map<String, Value> = c
+        .roles
+        .iter()
+        .map(|(r, e)| (r.clone(), json!({"notes": e.notes, "params": e.params})))
+        .collect();
+    Value::Object(m)
+}
+
+/// The roles of a page argument, checked like a file (`roles`: `{role: {notes, params}}`).
+fn roles_arg(v: &Value) -> std::collections::BTreeMap<String, crate::userdefaults::RoleEntry> {
+    let mut bad = Vec::new();
+    crate::userdefaults::roles_of(v, "roles", &mut bad)
+}
+
+/// M1d3 (#577): the commands of the user defaults. None takes a path; the folder is `userdefaults::dir()`, which a gate build has only
+/// with `DS_ARA_USER_DIR`. An answer with an `error` text is what the page shows in its status line.
+fn defaults_command(cmd: &str, args: &Value) -> Answer {
+    use crate::userdefaults as ud;
+    let Some(dir) = ud::dir() else {
+        return if cmd == "plugin_defaults_get" {
+            Answer::json(
+                200,
+                &json!({"status": "nofolder", "text": "", "roles": {}, "builtin": ud::BUILTIN, "presets": []}),
+            )
+        } else {
+            Answer::err(409, "the defaults could not be saved: there is no folder for them")
+        };
+    };
+    let text = |k: &str| args.get(k).and_then(Value::as_str).unwrap_or("").to_string();
+    match cmd {
+        "plugin_defaults_get" => {
+            let l = ud::current();
+            let (status, why) = match &l.status {
+                ud::Status::Ok if l.bad.is_empty() => ("ok", String::new()),
+                ud::Status::Ok => (
+                    "damaged",
+                    "Some values in the defaults file are not valid; built-in values are used for them.".into(),
+                ),
+                ud::Status::None => ("none", String::new()),
+                ud::Status::Damaged(_) => (
+                    "damaged",
+                    "The defaults file is damaged; built-in values are used.".into(),
+                ),
+                ud::Status::Newer => (
+                    "newer",
+                    "The defaults file is from a newer version of the plugin; it is read, never changed.".into(),
+                ),
+            };
+            let presets: Vec<Value> = ud::list_at(&dir)
+                .into_iter()
+                .map(|p| json!({"name": p.name, "builtin": p.builtin, "roles": roles_json(&p.checked)}))
+                .collect();
+            Answer::json(
+                200,
+                &json!({"status": status, "text": why, "roles": roles_json(&l.checked), "builtin": ud::BUILTIN, "presets": presets}),
+            )
+        }
+        "plugin_defaults_save_role" => {
+            let role = text("role");
+            let mut one = serde_json::Map::new();
+            one.insert(role.clone(), json!({"notes": args.get("notes").cloned().unwrap_or(Value::Null), "params": args.get("params").cloned().unwrap_or(json!({}))}));
+            let mut roles = roles_arg(&Value::Object(one));
+            match roles.remove(&role) {
+                Some(e) => match ud::save_role_at(&dir, &role, Some(&e)) {
+                    Ok(()) => Answer::json(200, &json!({"role": role, "notes": e.notes})),
+                    Err(m) => Answer::err(409, m),
+                },
+                None => Answer::err(400, "the defaults could not be saved: nothing in it is valid"),
+            }
+        }
+        "plugin_defaults_reset_role" => match ud::save_role_at(&dir, &text("role"), None) {
+            Ok(()) => Answer::json(200, &json!({"role": text("role")})),
+            Err(m) => Answer::err(409, m),
+        },
+        "plugin_preset_save" => {
+            let overwrite = args.get("overwrite").and_then(Value::as_bool).unwrap_or(false);
+            match ud::save_preset_at(
+                &dir,
+                &text("name"),
+                &roles_arg(args.get("roles").unwrap_or(&Value::Null)),
+                overwrite,
+            ) {
+                Ok(ud::PresetSave::Saved) => Answer::json(200, &json!({"name": text("name").trim(), "exists": false})),
+                Ok(ud::PresetSave::Exists(name)) => Answer::json(200, &json!({"name": name, "exists": true})),
+                Err(m) => Answer::err(409, m),
+            }
+        }
+        "plugin_preset_delete" => match ud::delete_preset_at(&dir, &text("name")) {
+            Ok(()) => Answer::json(200, &json!({})),
+            Err(m) => Answer::err(409, m),
+        },
+        _ => Answer::err(404, format!("unknown command {cmd}")),
+    }
+}
+
 /// In a test run the calls that would reach the system (a browser, the Finder) are recorded.
 fn open_system(arg: &str, reveal: bool) -> Result<(), String> {
     if test_mode().is_some() {
@@ -1043,6 +1144,8 @@ Until then NOTICE of the repository and the licence table in plugins/ara/README.
         }
         "plugin:drag|start_drag" => start_drag_command(sh, args),
         "plugin_pick_folder" => pick_folder_command(sh, args),
+        // M1d3 (#577): the user defaults and the presets of the plugin
+        c if c.starts_with("plugin_defaults_") || c.starts_with("plugin_preset_") => defaults_command(c, args),
         "plugin_host_tempo" => {
             let a = (sh.backend.tempo)();
             Answer::json(
@@ -2353,6 +2456,11 @@ mod tests {
                     "plugin_host_locate",
                     "plugin_pick_folder",
                     "plugin_host_tempo",
+                    "plugin_defaults_get",
+                    "plugin_defaults_save_role",
+                    "plugin_defaults_reset_role",
+                    "plugin_preset_save",
+                    "plugin_preset_delete",
                 ]
                 .contains(name);
             assert!(known, "{name} is not a command of the app");
@@ -2419,5 +2527,137 @@ mod tests {
     fn the_csp_keeps_every_load_on_the_page_scheme() {
         assert!(CSP.contains("default-src dspage:"));
         assert!(!CSP.contains("http"));
+    }
+
+    /// S6 (stage `editor-defaults`): the commands of the page through the real command layer (`defaults_command`), with the folder of
+    /// `DS_ARA_USER_DIR` (set by the stage below out/; without it these tests do nothing). Faults of the stage: `all-roles`, `in-place`, `trust`.
+    fn layer(cmd: &str, args: Value) -> (u16, Value) {
+        let a = defaults_command(cmd, &args);
+        let v = serde_json::from_slice::<Value>(&a.body).unwrap_or(Value::Null);
+        (a.status, v)
+    }
+
+    fn layer_folder() -> Option<PathBuf> {
+        std::env::var("DS_ARA_USER_DIR")
+            .ok()
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from)
+    }
+
+    /// The folder of a stage run, and nothing else: a folder named `user-*` directly below a folder named `out`. The tests below empty it; they never
+    /// delete a path that the environment names unless it has this shape (a plain `cargo test` with the variable set to a real folder fails here).
+    fn stage_folder() -> PathBuf {
+        let d = layer_folder()
+            .expect("DS_ARA_USER_DIR must be set: these tests are run by the stage editor-defaults of check.py (cargo test -- --ignored)");
+        let ok = d.file_name().is_some_and(|n| n.to_string_lossy().starts_with("user-"))
+            && d.parent().and_then(Path::file_name).is_some_and(|n| n == "out");
+        assert!(
+            ok,
+            "refusing to empty {}: not a user-* folder below an out folder",
+            d.display()
+        );
+        d
+    }
+
+    #[test]
+    #[ignore = "run by the stage editor-defaults (needs DS_ARA_USER_DIR below out/)"]
+    fn defaults_layer_get_save_preset_collision_delete_and_hostile_name() {
+        let dir = stage_folder();
+        let _ = std::fs::remove_dir_all(&dir);
+        let (s, v) = layer("plugin_defaults_get", json!({}));
+        assert_eq!(
+            (s, v["status"].as_str(), v["presets"][0]["name"].as_str()),
+            (200, Some("none"), Some("General MIDI"))
+        );
+        // save a role, read it back; the other roles are not written
+        let (s, v) = layer(
+            "plugin_defaults_save_role",
+            json!({"role": "snare", "notes": [41], "params": {"min_gap_ms": 33, "shift_samples": 9}}),
+        );
+        assert_eq!((s, v["notes"].clone()), (200, json!([41])), "{v}");
+        let (_, v) = layer("plugin_defaults_get", json!({}));
+        assert_eq!(v["roles"]["snare"]["notes"], json!([41]));
+        assert_eq!(
+            v["roles"]["snare"]["params"],
+            json!({"min_gap_ms": 33}),
+            "the shift is no default"
+        );
+        assert!(
+            v["roles"].as_object().unwrap().len() == 1,
+            "only the role that was saved: {v}"
+        );
+        // a preset: saved, listed; the same name asks; another name with the same file name is refused with a text
+        let roles = json!({"kick": {"notes": [35], "params": {}}});
+        let (s, v) = layer("plugin_preset_save", json!({"name": "A-B", "roles": roles}));
+        assert_eq!((s, v["exists"].clone()), (200, json!(false)));
+        let (s, v) = layer("plugin_preset_save", json!({"name": "A-B", "roles": roles}));
+        assert_eq!(
+            (s, v["exists"].clone()),
+            (200, json!(true)),
+            "the page asks before it replaces"
+        );
+        let (s, v) = layer(
+            "plugin_preset_save",
+            json!({"name": "A/B", "roles": roles, "overwrite": true}),
+        );
+        assert_eq!(s, 409);
+        assert!(v["message"].as_str().unwrap_or("").contains("file name exists"), "{v}");
+        let (s, _) = layer("plugin_preset_save", json!({"name": "General MIDI", "roles": roles}));
+        assert_eq!(s, 409);
+        // a hostile name stays inside Presets/
+        let (s, _) = layer("plugin_preset_save", json!({"name": "../x", "roles": roles}));
+        assert_eq!(s, 200);
+        assert!(!dir.join("x.json").exists() && !dir.parent().unwrap().join("x.json").exists());
+        let names: Vec<String> = std::fs::read_dir(dir.join("Presets"))
+            .unwrap()
+            .filter_map(Result::ok)
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        assert!(names.iter().all(|n| !n.contains('/')), "{names:?}");
+        let (_, v) = layer("plugin_defaults_get", json!({}));
+        let listed: Vec<String> = v["presets"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["name"].as_str().unwrap().to_string())
+            .collect();
+        assert!(
+            listed.contains(&"A-B".to_string()) && listed.contains(&"../x".to_string()),
+            "{listed:?}"
+        );
+        // delete: a user preset goes, the built-in one is refused
+        assert_eq!(layer("plugin_preset_delete", json!({"name": "A-B"})).0, 200);
+        assert_eq!(layer("plugin_preset_delete", json!({"name": "General MIDI"})).0, 409);
+        // reset removes the role
+        assert_eq!(layer("plugin_defaults_reset_role", json!({"role": "snare"})).0, 200);
+        let (_, v) = layer("plugin_defaults_get", json!({}));
+        assert!(v["roles"].as_object().unwrap().is_empty());
+        // a hostile file: the range check (note 300) gives no value for the role
+        std::fs::write(dir.join("defaults.json"), r#"{"v":1,"roles":{"kick":{"note":300}}}"#).unwrap();
+        let (_, v) = layer("plugin_defaults_get", json!({}));
+        assert!(
+            v["roles"].as_object().unwrap().is_empty(),
+            "the range check drops note 300: {v}"
+        );
+        // a bad role and a hostile note
+        assert_eq!(
+            layer("plugin_defaults_save_role", json!({"role": "bass", "notes": [1]})).0,
+            400
+        );
+        assert_eq!(
+            layer("plugin_defaults_save_role", json!({"role": "kick", "notes": [999]})).0,
+            400
+        );
+    }
+
+    #[test]
+    #[ignore = "run by the stage editor-defaults with DS_ARA_USER_DIR unset"]
+    fn defaults_layer_answers_without_a_folder_and_never_panics() {
+        // no folder (a gate build without the switch): get answers `nofolder`, a save says so
+        assert!(layer_folder().is_none(), "this test needs DS_ARA_USER_DIR unset");
+        let (s, v) = layer("plugin_defaults_get", json!({}));
+        assert_eq!((s, v["status"].as_str()), (200, Some("nofolder")));
+        let (s, _) = layer("plugin_defaults_save_role", json!({"role": "kick", "notes": [36]}));
+        assert_eq!(s, 409);
     }
 }

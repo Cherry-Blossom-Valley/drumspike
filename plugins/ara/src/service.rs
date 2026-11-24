@@ -176,6 +176,8 @@ pub struct SourceSnapshot {
     /// of the first region, else the name of that region), when the host gave one. The role guess
     /// reads it before the name of the audio source.
     pub label: Option<String>,
+    /// #577: the `orderIndex` of the DAW track of the source (`i32::MAX`: unknown); new tracks of one round get start values in this order.
+    pub order: i32,
 }
 
 impl SourceSnapshot {
@@ -482,6 +484,9 @@ pub struct DocService {
     page: std::sync::Arc<PageHandle>,
     /// A test aid: the next calls of `tracks_restore` in a round fail (R2).
     pub fail_restores: usize,
+    /// #577 (Q4): the settings that the archive holds for a source that has no result yet (F5). The first round makes the new
+    /// record of that track and lays them over it, so the values of the session win over any start value.
+    kept: HashMap<usize, Map<String, Value>>,
 }
 
 /// The home folder of the service of a document: inside the document's folder, so inside
@@ -664,7 +669,16 @@ impl DocService {
             canceller: Canceller::default(),
             page,
             fail_restores: 0,
+            kept: HashMap::new(),
         }
+    }
+
+    /// #577 (Q4, S7, S8): the settings that the document holds for a source (by its creation index) that has no track in the project yet: a source
+    /// the archive holds with no result, or a source whose track record was lost in a round (`forget_track`). The caller replaces the whole map
+    /// before each round; `analyse` lays an entry over the new record of exactly that source and drops the entries of sources that are gone.
+    /// A source that is not in the map (a new clip, a source that the DAW removed and made again) gets the user defaults.
+    pub fn keep_settings(&mut self, kept: HashMap<usize, Map<String, Value>>) {
+        self.kept = kept;
     }
 
     /// The handle the editor window uses to reach the service without the document lock.
@@ -984,6 +998,20 @@ impl DocService {
         let mut rows: Vec<Value> = Vec::with_capacity(new_sources.len());
         let mut track_of = HashMap::new();
         let mut role_audio: Vec<(String, usize, Option<String>)> = Vec::new();
+        // #577: ONE snapshot of the user defaults for the round, and the notes the tracks of each role use now
+        if switch("DS_ARA_DEFAULTS_FAULT").as_deref() != Some("keep-gone") {
+            self.kept.retain(|seq, _| snaps.iter().any(|s| s.seq == *seq)); // S7: a removed source leaves no values behind
+        }
+        let defaults = crate::userdefaults::current();
+        let mut used: HashMap<String, Vec<i64>> = HashMap::new();
+        if let Ok(all) = svc.tracks_get(&sid) {
+            for (_, tr) in all["tracks"].as_object().into_iter().flatten() {
+                if let (Some(r), Some(n)) = (tr["role"].as_str(), tr["note"].as_i64()) {
+                    used.entry(r.to_string()).or_default().push(n);
+                }
+            }
+        }
+        let mut fresh: Vec<bool> = Vec::new();
         for (s, name) in new_sources.iter().zip(&names) {
             let at = placed.iter().position(|(_, q)| *q > s.seq).unwrap_or(placed.len());
             placed.insert(at, (name.clone(), s.seq));
@@ -991,9 +1019,33 @@ impl DocService {
             if let Some(b) = bytes {
                 role_audio.push((name.clone(), b, track.role_source.as_ref().and(track.role.clone())));
             }
-            rows.push(json!({"name": name, "index": at, "order_index": at,
-                "track": serde_json::to_value(track).unwrap_or(Value::Null)}));
+            let mut record = serde_json::to_value(track).unwrap_or(Value::Null);
+            let is_kept = self.kept.contains_key(&s.seq);
+            fresh.push(!is_kept);
+            // #577 (Q4): a source that the archive held with no result: the settings of the session win over the new record
+            // (`DS_ARA_DEFAULTS_FAULT=lose-kept` is the fault run: they are dropped, as main did)
+            if let Some(kept) = self.kept.remove(&s.seq) {
+                if switch("DS_ARA_DEFAULTS_FAULT").as_deref() != Some("lose-kept") {
+                    if let Some(v) = overlay_settings(&record, &kept) {
+                        record = v;
+                    }
+                }
+            }
+            rows.push(json!({"name": name, "index": at, "order_index": at, "track": record}));
             track_of.insert(s.seq, name.clone());
+        }
+        // #577: the user defaults reach NEW tracks only (a source that the archive held keeps its session values), one after the other in
+        // the order of the DAW tracks, so several new toms take the notes of the list in turn
+        let mut order: Vec<usize> = (0..new_sources.len()).collect();
+        order.sort_by_key(|&i| (new_sources[i].order, new_sources[i].seq));
+        for i in order {
+            if !fresh[i] {
+                continue;
+            }
+            let role = rows[i]["track"]["role"].as_str().unwrap_or("other").to_string();
+            let mut record = rows[i]["track"].clone();
+            apply_defaults(&mut record, &role, &defaults, &mut used);
+            rows[i]["track"] = record;
         }
         if !rows.is_empty() {
             svc.tracks_restore(&sid, &Value::Array(rows)).map_err(err)?;
@@ -1256,6 +1308,13 @@ impl DocService {
                 Some(v) => v,
                 None => guessed()?,
             };
+            // #577 fault runs: a restore reads the user defaults (always: for every track; session-loses: over the stored settings)
+            let f = switch("DS_ARA_DEFAULTS_FAULT").unwrap_or_default();
+            if f == "always" || f == "session-loses" {
+                let role = track["role"].as_str().unwrap_or("other").to_string();
+                let mut used = HashMap::new();
+                apply_defaults(&mut track, &role, &crate::userdefaults::current(), &mut used);
+            }
             track["events"] = t.events.clone();
             // what the analysis would have recorded about the file (no decode needed)
             track["sr"] = json!(t.snapshot.sample_rate as i64);
@@ -1283,6 +1342,55 @@ impl DocService {
             project_tracks: self.track_names(),
             decode_counts: svc.decode_counts(),
         })
+    }
+
+    /// M1d3 (#577): the export settings of an archive go back into the project. Each key passes the checks of `export_last_set` (the
+    /// same call the page makes), so a hostile archive gets the refusals of a hostile page. Returns the names of the refused keys.
+    pub fn restore_export(&mut self, export: &Map<String, Value>) -> Vec<String> {
+        let (Ok(sid), Ok(svc)) = (self.ensure_open(), self.service()) else {
+            return vec!["export".into()];
+        };
+        let mut refused = Vec::new();
+        let mut args = json!({"sid": sid});
+        for k in ["formats", "midi_mode", "compensate"] {
+            if let Some(v) = export.get(k) {
+                args[k] = v.clone();
+            }
+        }
+        // `formats` is required by the call: without a valid list nothing is set, and the other keys are named
+        if args.get("formats").is_none() || svc.export_last_set(&sid, &args).is_err() {
+            // try the formats alone to name the refused key
+            let only = json!({"sid": sid, "formats": export.get("formats").cloned().unwrap_or(Value::Null)});
+            if svc.export_last_set(&sid, &only).is_err() {
+                refused.push("formats".to_string());
+            } else {
+                for k in ["midi_mode", "compensate"] {
+                    let mut one = only.clone();
+                    if let Some(v) = export.get(k) {
+                        one[k] = v.clone();
+                        if svc.export_last_set(&sid, &one).is_err() {
+                            refused.push(k.to_string());
+                        }
+                    }
+                }
+                // the last accepted combination stands: set the good keys again
+                let mut good = only.clone();
+                for k in ["midi_mode", "compensate"] {
+                    if let Some(v) = export.get(k) {
+                        let mut t = only.clone();
+                        t[k] = v.clone();
+                        if svc.export_last_set(&sid, &t).is_ok() {
+                            good[k] = v.clone();
+                        }
+                    }
+                }
+                let _ = svc.export_last_set(&sid, &good);
+            }
+        }
+        if let Some(b) = export.get("compensate").and_then(Value::as_bool) {
+            let _ = svc.export_compensate_set(&sid, b);
+        }
+        refused
     }
 
     /// F6 (#582): point the project record of restored tracks at the cache file that the reader wrote.
@@ -1468,6 +1576,47 @@ fn audio_role(wav: &Path) -> (Option<&'static str>, usize) {
     )
 }
 
+/// #577: the start values of a NEW track of `role` from the user defaults: the first note of the role's list that no other track of the
+/// role uses (`used` grows), and the detection settings. A role with no entry keeps the built-in note. A record that is not an object
+/// is left alone.
+fn apply_defaults(
+    record: &mut Value,
+    role: &str,
+    defaults: &crate::userdefaults::Loaded,
+    used: &mut HashMap<String, Vec<i64>>,
+) {
+    let Some(obj) = record.as_object_mut() else { return };
+    let list = used.entry(role.to_string()).or_default();
+    if let Some(entry) = defaults.checked.roles.get(role) {
+        if let Some(n) = crate::userdefaults::pick_note(&entry.notes, list) {
+            obj.insert("note".into(), Value::from(i64::from(n)));
+        }
+        if !entry.params.is_empty() {
+            let mut p = obj
+                .get("params")
+                .and_then(Value::as_object)
+                .cloned()
+                .unwrap_or_default();
+            for (k, v) in &entry.params {
+                p.insert(k.clone(), v.clone());
+            }
+            obj.insert("params".into(), Value::Object(p));
+        }
+    }
+    if let Some(n) = obj.get("note").and_then(Value::as_i64) {
+        list.push(n);
+    }
+}
+
+/// The notes that a new track of `role` would start with now: the user default list, else the built-in note.
+fn start_notes(role: &str) -> Vec<i64> {
+    let d = crate::userdefaults::current();
+    match d.checked.roles.get(role) {
+        Some(e) if !e.notes.is_empty() => e.notes.iter().map(|n| i64::from(*n)).collect(),
+        _ => vec![default_note(role)],
+    }
+}
+
 /// The record of a track (`obj`, JSON) gets the role that the DAW name of `s` gives, unless the
 /// user set the role. Returns whether the role changed.
 fn apply_label_role(obj: &mut Map<String, Value>, s: &SourceSnapshot) -> bool {
@@ -1486,12 +1635,17 @@ fn apply_label_role(obj: &mut Map<String, Value>, s: &SourceSnapshot) -> bool {
     if current == new_role {
         return false;
     }
-    let note_is_default = obj.get("note").and_then(Value::as_i64) == Some(default_note(&current));
+    // #577: "the default note of the old role" is the note that a NEW track of that role would get now (user list, else built-in); a note
+    // that is none of them was set by the user and stays
+    let note_is_default = obj
+        .get("note")
+        .and_then(Value::as_i64)
+        .is_some_and(|n| n == default_note(&current) || start_notes(&current).contains(&n));
     obj.insert("role".into(), Value::from(new_role));
     obj.insert("role_source".into(), Value::from("guess"));
     obj.insert("role_match".into(), Value::from(words));
     if note_is_default {
-        obj.insert("note".into(), Value::from(default_note(new_role)));
+        obj.insert("note".into(), Value::from(start_notes(new_role)[0]));
     }
     true
 }
@@ -1691,6 +1845,7 @@ mod tests {
             audio_gen: 0,
             regions: Vec::new(),
             label: label.map(str::to_string),
+            order: i32::MAX,
         }
     }
 
@@ -1943,7 +2098,174 @@ mod tests {
             audio_gen: 0,
             regions: Vec::new(),
             label: None,
+            order: i32::MAX,
         }
+    }
+
+    /// #577 (Q4): a source that the archive holds with no result keeps the settings of the session in its first round.
+    #[test]
+    fn a_source_held_without_a_result_keeps_its_session_settings_in_its_first_round() {
+        let cache = scratch("kept");
+        let id = new_doc_id();
+        let mut doc = DocService::new(cache.clone(), id.clone());
+        let mut kept = HashMap::new();
+        let mut m = Map::new();
+        m.insert("role".into(), json!("tom"));
+        m.insert("role_source".into(), json!("user"));
+        m.insert("note".into(), json!(41));
+        m.insert("params".into(), json!({"min_gap_ms": 77}));
+        kept.insert(0, m);
+        doc.keep_settings(kept);
+        // the file name says snare, the session says tom with note 41: the session wins
+        let src = snapshot_of(&cache, &id, 0, "snare.wav");
+        doc.analyse(std::slice::from_ref(&src), false).unwrap();
+        let svc = doc.service().unwrap();
+        let sid = doc.sid.clone().unwrap();
+        let got = settings_of(&svc, &sid, &["snare".to_string()]).unwrap();
+        assert_eq!(got["snare"]["role"], "tom");
+        assert_eq!(got["snare"]["note"], 41);
+        assert_eq!(got["snare"]["params"]["min_gap_ms"], 77);
+    }
+
+    /// S7: a source that is gone before its first round leaves no values behind; a new source of the same name is a new track.
+    #[test]
+    fn the_kept_values_of_a_removed_source_never_reach_a_new_source_of_the_same_name() {
+        let cache = scratch("kept-gone");
+        let id = new_doc_id();
+        let mut doc = DocService::new(cache.clone(), id.clone());
+        let mut m = Map::new();
+        m.insert("role".into(), json!("tom"));
+        m.insert("role_source".into(), json!("user"));
+        m.insert("note".into(), json!(41));
+        doc.keep_settings(HashMap::from([(0, m)]));
+        // source 0 is removed; source 1 has the same file name and arrives
+        let again = snapshot_of(&cache, &id, 1, "snare.wav");
+        doc.analyse(std::slice::from_ref(&again), false).unwrap();
+        let svc = doc.service().unwrap();
+        let sid = doc.sid.clone().unwrap();
+        let got = settings_of(&svc, &sid, &["snare".to_string()]).unwrap();
+        assert_eq!(
+            got["snare"]["role"], "snare",
+            "a new track: the role of its name, not the old session"
+        );
+        assert_eq!(got["snare"]["note"], 38);
+        assert!(doc.kept.is_empty(), "the entry of the gone source was dropped");
+    }
+
+    /// S8: a source whose record was lost in a round and comes back as new gets the values the document holds (the caller passes them by its
+    /// seq); S9: a restore that comes after a first round replaces the project, and the values it brings win over the start values of that round.
+    #[test]
+    fn a_restore_after_a_first_round_wins_and_the_values_of_the_document_win_for_the_same_source() {
+        let cache = scratch("kept-late");
+        let id = new_doc_id();
+        let mut doc = DocService::new(cache.clone(), id.clone());
+        let src = snapshot_of(&cache, &id, 0, "snare.wav");
+        doc.analyse(std::slice::from_ref(&src), false).unwrap(); // a round that saw the source before the restore: built-in values
+        let mut m = Map::new();
+        m.insert("role".into(), json!("tom"));
+        m.insert("role_source".into(), json!("user"));
+        m.insert("note".into(), json!(41));
+        // the restore (no track with a result) resets the project and the tracks of the service; the values wait for the source
+        doc.restore(&[]).unwrap();
+        doc.keep_settings(HashMap::from([(0, m)]));
+        doc.analyse(std::slice::from_ref(&src), false).unwrap();
+        let svc = doc.service().unwrap();
+        let sid = doc.sid.clone().unwrap();
+        let got = settings_of(&svc, &sid, &["snare".to_string()]).unwrap();
+        assert_eq!(
+            (got["snare"]["role"].as_str(), got["snare"]["note"].as_i64()),
+            (Some("tom"), Some(41))
+        );
+    }
+
+    fn defaults_with(text: &str) -> crate::userdefaults::Loaded {
+        let d = scratch("ud");
+        std::fs::write(d.join("defaults.json"), text).unwrap();
+        crate::userdefaults::load_at(&d)
+    }
+
+    #[test]
+    fn new_toms_take_the_notes_of_the_list_in_turn_and_the_last_when_the_list_is_used() {
+        let d = defaults_with(
+            r#"{"v":1,"roles":{"tom":{"notes":[50,48,47],"params":{"min_gap_ms":33}},"snare":{"note":40}}}"#,
+        );
+        let mut used: HashMap<String, Vec<i64>> = HashMap::new();
+        used.entry("tom".into()).or_default().push(50); // a tom of the document uses 50
+        let mut got = Vec::new();
+        for _ in 0..5 {
+            let mut rec = json!({"role": "tom", "note": 48, "params": {"refine": true}});
+            apply_defaults(&mut rec, "tom", &d, &mut used);
+            assert_eq!(rec["params"]["min_gap_ms"], 33);
+            assert_eq!(rec["params"]["refine"], true, "a key the default does not name stays");
+            got.push(rec["note"].as_i64().unwrap());
+        }
+        assert_eq!(got, [48, 47, 47, 47, 47]);
+        let mut snare = json!({"role": "snare", "note": 38});
+        apply_defaults(&mut snare, "snare", &d, &mut used);
+        assert_eq!(snare["note"], 40);
+        // a role with no entry keeps the built-in note and its params
+        let mut hat = json!({"role": "hat", "note": 42});
+        apply_defaults(&mut hat, "hat", &d, &mut used);
+        assert_eq!(hat, json!({"role": "hat", "note": 42}));
+    }
+
+    #[test]
+    fn a_role_that_the_daw_name_changes_keeps_a_note_the_user_set() {
+        // the note equals the built-in note of the old role: it follows the new role
+        let snare = SourceSnapshot {
+            label: Some("Snare".into()),
+            ..labelled(Some("Snare"))
+        };
+        let mut rec = json!({"role": "other", "note": 36});
+        assert!(apply_label_role(rec.as_object_mut().unwrap(), &snare));
+        assert_eq!(rec["note"], 38);
+        let mut own = json!({"role": "other", "note": 41});
+        assert!(apply_label_role(own.as_object_mut().unwrap(), &snare));
+        assert_eq!(own["note"], 41, "a note that was set by hand stays");
+    }
+
+    #[test]
+    fn the_export_settings_of_an_archive_are_range_checked_like_a_hostile_page() {
+        let cache = scratch("exp");
+        let id = new_doc_id();
+        let mut doc = DocService::new(cache.clone(), id.clone());
+        let mut good = Map::new();
+        good.insert("formats".into(), json!(["midi", "spikes"]));
+        good.insert("midi_mode".into(), json!("single"));
+        good.insert("compensate".into(), json!(false));
+        assert!(doc.restore_export(&good).is_empty());
+        let svc = doc.service().unwrap();
+        let sid = doc.sid.clone().unwrap();
+        let got = svc.export_last_get(&sid).unwrap();
+        assert_eq!(got["export_last"]["midi_mode"], "single");
+        assert_eq!(got["export_last"]["compensate"], false);
+        assert_eq!(got["export_compensate"], false);
+        // hostile values: each is refused and named, the good key stays
+        let mut doc2 = DocService::new(scratch("exp2"), new_doc_id());
+        let mut bad = Map::new();
+        bad.insert("formats".into(), json!(["midi", "../../x"]));
+        bad.insert("midi_mode".into(), json!("evil"));
+        bad.insert("compensate".into(), json!("yes"));
+        bad.insert("dest".into(), json!("/etc"));
+        let refused = doc2.restore_export(&bad);
+        assert!(refused.contains(&"formats".to_string()), "{refused:?}");
+        let sid2 = doc2.sid.clone().unwrap();
+        assert!(
+            doc2.service().unwrap().export_last_get(&sid2).unwrap()["export_last"].is_null(),
+            "nothing was set"
+        );
+        let mut half = Map::new();
+        half.insert("formats".into(), json!(["audio"]));
+        half.insert("midi_mode".into(), json!("evil"));
+        half.insert("dest".into(), json!("/etc"));
+        let refused = doc2.restore_export(&half);
+        assert_eq!(refused, ["midi_mode"]);
+        let last = doc2.service().unwrap().export_last_get(&sid2).unwrap();
+        assert_eq!(last["export_last"]["formats"], json!(["audio"]));
+        assert!(
+            last["export_last"]["dest"].is_null(),
+            "a dest of an archive is never taken"
+        );
     }
 
     fn scratch(tag: &str) -> PathBuf {

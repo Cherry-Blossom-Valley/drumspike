@@ -336,6 +336,12 @@ function shellMethods(invoke, T) {
     deliverState: () => (bridge() ? Promise.resolve(null) : invoke("plugin_deliver_state", {})),
     deliverTake: items => invoke("plugin_deliver_take", { items }),
     deliverWant: (kind, row) => invoke("plugin_deliver_want", row ? { kind, row } : { kind }),
+    /* #577: the user defaults and presets of the plugin (the plugin owns the files; the test bridge and the standalone app have none: defaultsGet answers none). */
+    defaultsGet: () => (bridge() ? Promise.resolve(null) : invoke("plugin_defaults_get", {})),
+    defaultsSaveRole: (role, notes, params) => invoke("plugin_defaults_save_role", { role, notes, params }),
+    defaultsResetRole: role => invoke("plugin_defaults_reset_role", { role }),
+    presetSave: (name, roles, overwrite) => invoke("plugin_preset_save", { name, roles, overwrite: !!overwrite }),
+    presetDelete: name => invoke("plugin_preset_delete", { name }),
     exportDragTake: (sid, paths) => invoke("export_drag_take", { sid, paths }),   // #433: a drag starts: the files move into Exports/ under their export names; {files}
     /* the native file drag out of the window (tauri-plugin-drag): the files must exist. The test bridge has no native drag: it records
        the paths in window.__DS_DRAG__ */

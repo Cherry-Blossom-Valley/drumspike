@@ -53,6 +53,7 @@ pub mod service;
 pub mod state;
 pub mod tempo_ara;
 pub mod transport;
+pub mod userdefaults;
 pub mod wav;
 
 use ara::*;
@@ -289,6 +290,7 @@ impl SourceState {
         };
         service::SourceSnapshot {
             seq: self.seq,
+            order: self.order(),
             // `DS_ARA_NAMES_FAULT=key` (the check's fault run): the track key follows the name of
             // the DAW track, which the identity of a track must never do
             name: if crate::test_switch("DS_ARA_NAMES_FAULT").as_deref() == Ok("key") {
@@ -323,6 +325,20 @@ impl SourceState {
         }
         let seqs = self.doc.sequences.lock().unwrap_or_else(|e| e.into_inner()).clone();
         self.label_in(&seqs)
+    }
+
+    /// #577: the place of the DAW track of the first region (its `orderIndex`), `i32::MAX` when the host gave none: new tracks of one round
+    /// take their start values in this order.
+    fn order(&self) -> i32 {
+        let seqs = self.doc.sequences.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let Ok(regions) = self.regions.lock() else {
+            return i32::MAX;
+        };
+        regions
+            .iter()
+            .min_by(|a, b| a.rec.start_play.total_cmp(&b.rec.start_play).then(a.id.cmp(&b.id)))
+            .and_then(|r| seqs.get(&r.sequence).and_then(|q| q.order))
+            .unwrap_or(i32::MAX)
     }
 
     /// [`SourceState::label`] with the region sequences already read (one copy for many sources).
@@ -448,6 +464,12 @@ struct DocShared {
     members: Mutex<Vec<std::sync::Weak<SourceState>>>,
     /// Sources whose notes changed in a later round: the host is told in `notifyModelUpdates`.
     pending: Mutex<Vec<Arc<SourceState>>>,
+    /// M1d3 (#577): the export settings of the document as the archive keeps them (`formats`, `midi_mode`, `compensate`); empty until the
+    /// page sets them or a restore brings them. Lock order: events, settings, export.
+    export: Mutex<serde_json::Map<String, Value>>,
+    /// #577 (Q4): the settings of the sources that the archive holds with no result, by source creation index; they wait for the first round of
+    /// the source. The whole map is replaced by each restore, and `run_job` hands the entries of live sources to the service.
+    kept_seq: Mutex<HashMap<usize, serde_json::Map<String, Value>>>,
     /// The editor's way to the service (it never takes the `svc` lock the worker holds).
     page: Arc<service::PageHandle>,
     /// The ARA playback controller of the host (M1b7), when the host gives one. Set in
@@ -605,6 +627,8 @@ impl DocShared {
         let doc = Arc::new(DocShared {
             cache,
             page: svc.page_handle(),
+            export: Mutex::new(serde_json::Map::new()),
+            kept_seq: Mutex::new(HashMap::new()),
             round_regions: Mutex::new(HashMap::new()),
             round_samples: Mutex::new(HashMap::new()),
             region_gen: AtomicU64::new(0),
@@ -765,6 +789,8 @@ impl DocShared {
         // would miss it): read at every edit, and set together with the events (below), so a store never sees a
         // new role with old hits
         let fresh_settings = self.read_settings(svc, sid);
+        let export_before = self.export.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let fresh_export = read_export(svc, sid);
         let mut all = serde_json::Map::new();
         for s in members.iter().filter(|s| !s.removed.load(Ordering::SeqCst)) {
             let Some(track) = s.track.lock().ok().and_then(|t| t.clone()) else {
@@ -814,6 +840,11 @@ impl DocShared {
         let mut cur = self.events.lock().unwrap_or_else(|e| e.into_inner());
         let mut st = self.settings.lock().unwrap_or_else(|e| e.into_inner());
         self.merge_settings_in(&mut st, fresh_settings);
+        merge_export(
+            &mut self.export.lock().unwrap_or_else(|x| x.into_inner()),
+            &export_before,
+            fresh_export,
+        );
         if *cur == all {
             return Ok(false);
         }
@@ -2430,9 +2461,23 @@ impl Session {
             .iter()
             .map(|x| (x.seq, x.regions.clone(), x.sample_rate))
             .collect();
+        // #577 (Q4, S7, S8): the values the document holds for a source that has no track in the project yet: the entries of the restore, and the
+        // settings of a source whose track record was lost in a round. The service uses an entry only for a NEW source and drops the others.
+        let kept: HashMap<usize, serde_json::Map<String, Value>> = {
+            let live: Vec<(usize, Option<String>)> = members
+                .iter()
+                .filter(|s| !s.removed.load(Ordering::SeqCst))
+                .map(|s| (s.seq, s.track.lock().ok().and_then(|t| t.clone())))
+                .collect();
+            let part: Vec<usize> = snaps.iter().map(|x| x.seq).collect();
+            let mut m = doc.kept_seq.lock().unwrap_or_else(|e| e.into_inner());
+            let st = doc.settings.lock().unwrap_or_else(|e| e.into_inner());
+            kept_for_round(&mut m, &live, &part, &st)
+        };
         let worker_doc = doc.clone();
         let outcome = guard("service job", Err("the service job panicked".to_string()), move || {
             let mut svc = worker_doc.lock_svc();
+            svc.keep_settings(kept);
             let result = svc.analyse(&snaps, force)?;
             Ok((result, svc.id().to_string(), svc.folder(), svc.home()))
         });
@@ -2514,6 +2559,23 @@ impl Session {
                 names.sort();
                 names.dedup();
                 doc.read_settings_for(&svc, &sid, &names)
+            }
+            _ => None,
+        };
+        // #577 (S10): the export settings follow the service at each round too (the scenario `export-last:<json>` of the check sets them
+        // through the same call as the page, so the store stage proves the store direction)
+        let export_before = doc.export.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let fresh_export = match (doc.page.service(), doc.page.sid()) {
+            (Some(svc), Some(sid)) => {
+                if let Some(args) = crate::test_switch("DS_ARA_SCENARIO").ok().and_then(|v| {
+                    v.strip_prefix("export-last:")
+                        .and_then(|j| serde_json::from_str::<Value>(j).ok())
+                }) {
+                    let mut a = args;
+                    a["sid"] = Value::from(sid.clone());
+                    let _ = svc.export_last_set(&sid, &a);
+                }
+                read_export(&svc, &sid)
             }
             _ => None,
         };
@@ -2615,6 +2677,11 @@ impl Session {
         });
         *ev = result.events.clone();
         doc.merge_settings_in(&mut st, fresh_settings);
+        merge_export(
+            &mut doc.export.lock().unwrap_or_else(|x| x.into_inner()),
+            &export_before,
+            fresh_export,
+        );
         drop(st);
         drop(ev);
         for f in old_files {
@@ -2850,6 +2917,15 @@ impl Session {
                 svc.set_id(id);
             }
             let result = svc.restore(&tracks)?;
+            let export = worker_doc.export.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            if !export.is_empty() && crate::test_switch("DS_ARA_DEFAULTS_FAULT").as_deref() != Ok("export-drop") {
+                let refused = svc.restore_export(&export);
+                if !refused.is_empty() {
+                    session().log(
+                        json!({"event": "restore_refused", "what": "export settings", "fields": refused}).to_string(),
+                    );
+                }
+            }
             Ok((result, svc.id().to_string(), svc.folder(), svc.home()))
         });
         match outcome {
@@ -4537,6 +4613,84 @@ unsafe extern "C" fn dc_destroyPlaybackRegion(c: ARADocumentControllerRef, r: AR
     })
 }
 
+/// #577 (round 3): the values the document holds for sources that have no track in the project yet, for one round.
+/// - `kept_seq` (the entries of the archive restore, by source) keeps an entry as long as its source EXISTS in the document (`live`: not removed), also
+///   when the source takes no part in this round (a source with no result waits for its audio; a round of another source must not drop its values).
+/// - A source that already has a track name (`live.1`) is served from the document settings, which are newer than the archive entry, and its entry is
+///   removed from `kept_seq` (it was used); the entry never comes back to overlay a later edit.
+///
+/// Faults: `kept-by-round` keeps only the sources of this round (`part`); `kept-stale` lets the archive entry win and never removes it.
+fn kept_for_round(
+    kept_seq: &mut HashMap<usize, serde_json::Map<String, Value>>,
+    live: &[(usize, Option<String>)],
+    part: &[usize],
+    settings: &serde_json::Map<String, Value>,
+) -> HashMap<usize, serde_json::Map<String, Value>> {
+    let f = crate::test_switch("DS_ARA_DEFAULTS_FAULT").unwrap_or_default();
+    if f == "kept-by-round" {
+        kept_seq.retain(|seq, _| part.contains(seq));
+    } else {
+        kept_seq.retain(|seq, _| live.iter().any(|(s, _)| s == seq));
+    }
+    let mut out = kept_seq.clone();
+    for (seq, track) in live {
+        // a source without a track name had no round yet: its archive entry serves and stays
+        let Some(t) = track.as_ref() else {
+            continue;
+        };
+        let own = settings.get(t).and_then(Value::as_object).filter(|o| !o.is_empty());
+        if f == "kept-stale" {
+            if let Some(own) = own {
+                out.entry(*seq).or_insert_with(|| own.clone());
+            }
+            continue;
+        }
+        // a source with a track name had its round: the archive entry is used up, also when the document holds no values for it
+        kept_seq.remove(seq);
+        match own {
+            Some(own) => {
+                out.insert(*seq, own.clone());
+            }
+            None => {
+                out.remove(seq);
+            }
+        }
+    }
+    out
+}
+
+/// #577 (round 3, D): set the export settings of the document from a read of the service made EARLIER, only when nobody changed them since that read
+/// (`before` is what the document held when the service was read); a newer change by the page stays.
+fn merge_export(
+    cur: &mut serde_json::Map<String, Value>,
+    before: &serde_json::Map<String, Value>,
+    fresh: Option<serde_json::Map<String, Value>>,
+) {
+    if let Some(e) = fresh {
+        if cur == before {
+            *cur = e;
+        }
+    }
+}
+
+/// M1d3 (#577): the export settings that the archive keeps, read from the service: `formats`, `midi_mode`, `compensate` of `export_last`
+/// (`None` before the first export or when the service cannot answer: the archive then keeps what it had). Never `scope`, `track` or
+/// `dest`. (Fault `export-drop`: nothing is kept.)
+fn read_export(svc: &drumspike_app::Service, sid: &str) -> Option<serde_json::Map<String, Value>> {
+    if crate::test_switch("DS_ARA_DEFAULTS_FAULT").as_deref() == Ok("export-drop") {
+        return None;
+    }
+    let got = svc.export_last_get(sid).ok()?;
+    let last = got["export_last"].as_object()?;
+    let mut out = serde_json::Map::new();
+    for k in ["formats", "midi_mode", "compensate"] {
+        if let Some(v) = last.get(k) {
+            out.insert(k.into(), v.clone());
+        }
+    }
+    Some(out)
+}
+
 // ---------------------------------------------------------------- archiving
 
 /// The document archive ID of this plugin's factory.
@@ -4631,6 +4785,7 @@ unsafe extern "C" fn dc_storeObjectsToArchive(
             doc_id: ctl.doc.id(),
             events,
             sources,
+            export: ctl.doc.export.lock().unwrap_or_else(|e| e.into_inner()).clone(),
         });
         if ctl.host.is_null() {
             return 0;
@@ -4704,6 +4859,7 @@ unsafe extern "C" fn dc_restoreObjectsFromArchive(
                 id = Some(st.doc_id.clone());
             }
         }
+        *ctl.doc.export.lock().unwrap_or_else(|e| e.into_inner()) = st.export.clone();
         // the events of the archive that name a track the plugin can keep (a name that is
         // no path); the others are dropped and the report says how many
         let events_ok: Vec<(&String, &Value)> = st
@@ -4721,6 +4877,7 @@ unsafe extern "C" fn dc_restoreObjectsFromArchive(
         let mut restored: Vec<service::RestoredTrack> = Vec::new();
         let mut used: Vec<usize> = Vec::new();
         let mut no_result: Vec<(String, serde_json::Map<String, Value>)> = Vec::new();
+        let mut kept_seq: HashMap<usize, serde_json::Map<String, Value>> = HashMap::new();
         if let Ok(list) = ctl.sources.lock() {
             for src in list.iter() {
                 let p = src.props();
@@ -4753,6 +4910,7 @@ unsafe extern "C" fn dc_restoreObjectsFromArchive(
                     if fault != "result" && !has_entry {
                         s.log(json!({"event": "restore_no_result", "name": a.name, "track": track}).to_string());
                         if !a.settings.is_empty() {
+                            kept_seq.insert(src.seq, a.settings.clone());
                             no_result.push((track, a.settings.clone()));
                         }
                         continue;
@@ -4824,6 +4982,7 @@ unsafe extern "C" fn dc_restoreObjectsFromArchive(
             }
             *ctl.doc.settings.lock().unwrap_or_else(|e| e.into_inner()) = m;
         }
+        *ctl.doc.kept_seq.lock().unwrap_or_else(|e| e.into_inner()) = kept_seq;
         send(
             s,
             Msg::Restore {
@@ -5775,6 +5934,81 @@ mod tests {
         let found = find_archived(&stored, "", "/some/folder/snare.wav", &[]).expect("matched by name");
         assert_eq!(found.name, "snare.wav");
         assert!(find_archived(&stored, "", "/some/folder/tom.wav", &[]).is_none());
+    }
+
+    fn m(note: i64) -> serde_json::Map<String, Value> {
+        json!({"note": note}).as_object().unwrap().clone()
+    }
+
+    /// Round 3 A: a source with no result that does not take part in a round keeps its values for its own first round.
+    #[test]
+    fn a_source_with_no_result_that_is_not_in_a_round_keeps_its_values() {
+        let mut kept = HashMap::from([(1usize, m(41))]);
+        // A (seq 0) has a track and takes part; B (seq 1) has none and waits for its audio
+        let live = [(0usize, Some("a".to_string())), (1, None)];
+        let settings = json!({"a": {"note": 36}}).as_object().unwrap().clone();
+        let out = kept_for_round(&mut kept, &live, &[0], &settings);
+        assert_eq!(out.get(&1), Some(&m(41)), "B keeps its archive values");
+        assert!(kept.contains_key(&1), "and the entry stays for B's own round");
+        // a source that is gone loses its entry
+        let out = kept_for_round(&mut kept, &[(0, Some("a".into()))], &[0], &settings);
+        assert!(!out.contains_key(&1) && kept.is_empty());
+    }
+
+    /// Round 3 B: after the round that used an entry, the document settings win, and the stale archive entry never comes back.
+    #[test]
+    fn a_used_entry_is_removed_and_the_newer_document_values_win_after_a_forget() {
+        let mut kept = HashMap::from([(1usize, m(41))]);
+        let none = serde_json::Map::new();
+        // B's first round: no track yet, the archive values serve
+        assert_eq!(
+            kept_for_round(&mut kept, &[(1, None)], &[1], &none).get(&1),
+            Some(&m(41))
+        );
+        // the round made the track; the user set 45; a failure path forgets the record and B is new again
+        let settings = json!({"b": {"note": 45}}).as_object().unwrap().clone();
+        let out = kept_for_round(&mut kept, &[(1, Some("b".into()))], &[1], &settings);
+        assert_eq!(
+            out.get(&1),
+            Some(&m(45)),
+            "the document settings win over the archive entry"
+        );
+        assert!(kept.is_empty(), "the used entry is gone");
+        let out = kept_for_round(&mut kept, &[(1, Some("b".into()))], &[1], &settings);
+        assert_eq!(out.get(&1), Some(&m(45)));
+    }
+
+    /// Round 4: a source that had its round and whose document values are gone never gets the old archive entry again.
+    #[test]
+    fn a_source_with_a_track_and_no_document_values_never_gets_the_old_archive_entry() {
+        let mut kept = HashMap::from([(1usize, m(41)), (2usize, m(38))]);
+        let none = serde_json::Map::new();
+        let out = kept_for_round(&mut kept, &[(1, Some("b".into())), (2, None)], &[1, 2], &none);
+        assert_eq!(
+            out.get(&1),
+            None,
+            "no stale archive values for a source that had its round"
+        );
+        assert_eq!(out.get(&2), Some(&m(38)), "a source without a round keeps its entry");
+        assert_eq!(kept.len(), 1, "only the used-up entry is gone");
+        assert!(kept.contains_key(&2));
+    }
+
+    /// Round 3 D: a change of the export settings between the read and the write is not overwritten by the older read.
+    #[test]
+    fn an_older_read_of_the_export_settings_never_overwrites_a_newer_change() {
+        let old = json!({"midi_mode": "per_track"}).as_object().unwrap().clone();
+        let newer = json!({"midi_mode": "single"}).as_object().unwrap().clone();
+        let read = json!({"midi_mode": "per_track", "compensate": true})
+            .as_object()
+            .unwrap()
+            .clone();
+        let mut cur = old.clone();
+        merge_export(&mut cur, &old, Some(read.clone()));
+        assert_eq!(cur, read, "nobody changed it: the read is taken");
+        let mut cur = newer.clone();
+        merge_export(&mut cur, &old, Some(read));
+        assert_eq!(cur, newer, "the page changed it after the read: the change stays");
     }
 
     #[test]
