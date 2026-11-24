@@ -616,6 +616,13 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
         })
         .collect();
     let region_spec = args_value(rest, "--region").and_then(|v| parse_region(&v).ok());
+    // M1d4 (mode `firstopen`): `--enable-access-after <ms>:<k>` gives source k its samples access that long after the sources were added
+    // (a DAW that gives the audio late); `--update-fail-reads <n>` makes the first n reads of the new audio of `--update-content-after` fail
+    let access_after: Option<(u64, usize)> = args_value(rest, "--enable-access-after").and_then(|v| {
+        v.split_once(':')
+            .and_then(|(ms, k)| Some((ms.parse().ok()?, k.parse().ok()?)))
+    });
+    let update_fail_reads: Option<usize> = args_value(rest, "--update-fail-reads").and_then(|v| v.parse().ok());
     // M1d1 (mode `leftovers`): after the page's `leftovers` report the host replaces the audio of source k (`--update-content-after <k>:<wav>`)
     let update_after: Option<(usize, String)> = args_value(rest, "--update-content-after").and_then(|v| {
         v.split_once(':')
@@ -867,7 +874,13 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
         let mut window_visible = false;
         let ready_limit = Duration::from_secs(25);
         // mode `deliver` (M1c3) waits for the first use of the wav kinds, an edit and the files after it: minutes, not one
-        let phase_limit = Duration::from_secs(if mode == "deliver" { 300 } else { 60 });
+        let phase_limit = Duration::from_secs(if mode == "deliver" {
+            300
+        } else if mode == "firstopen" {
+            150
+        } else {
+            60
+        });
         for round in 1..=cycles {
             if !((*gui).create.expect("create"))(plugin, cocoa.as_ptr(), false) {
                 failed = Some("gui create refused".into());
@@ -907,6 +920,7 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                 // the page reports the names it got, the host renames and moves, the page reports again
                 "names" => Some("names-after"),
                 "leftovers" => Some("leftovers-after"),
+                "firstopen" => Some("firstopen"),
                 // M1b8: the page reports the rows it got, the host renames, moves, shifts and trims, the page reports again
                 "song" => Some("song-after"),
                 "edit-destroy" => Some("edit"),
@@ -930,6 +944,8 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
             let refuse_before = count_rows("page_report", Some("refuse"));
             let started_before = count_rows("page_report", Some("analyse-started"));
             let mut late_done = false;
+            let mut access_done = false;
+            let jobs_at_start = count_rows("job", None);
             let mut edit_handled = false;
             let mut destroyed_jobs: Option<usize> = None;
             if round == 1 {
@@ -1243,7 +1259,7 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                 }
                 if !late_done && !late_files.is_empty() {
                     let trigger = match mode.as_str() {
-                        "open-first" => count_rows("page_report", Some("boot")) > boots_before,
+                        "open-first" | "firstopen" => count_rows("page_report", Some("boot")) > boots_before,
                         "edit-round" => count_rows("page_report", Some("edit")) > edits_before,
                         "refuse" => count_rows("page_report", Some("refuse")) > refuse_before,
                         "analyse-race" => count_rows("page_report", Some("analyse-started")) > started_before,
@@ -1253,17 +1269,28 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                         late_done = true;
                         // the editor stays alive while the host works (its page waits)
                         let jobs_before = count_rows("job", None);
-                        if let Err(e) = doc.add_and_analyse(&late_files, "late") {
+                        // M1d4 (mode `firstopen`): the sources are added and requested, nothing is waited for: the page shows the states
+                        // while the plugin reads and analyses, and the host pumps in the loop below
+                        let added = if mode == "firstopen" {
+                            doc.add_and_request(&late_files, "late")
+                                .map(|(p, _)| doc.pairs.extend(p))
+                        } else {
+                            doc.add_and_analyse(&late_files, "late")
+                        };
+                        if let Err(e) = added {
                             failed = Some(e);
                             break;
                         }
                         // the source is complete a moment before the plugin writes the row of its
                         // round: wait for the row, so the report is whole when the run ends
                         let t = Instant::now();
-                        while t.elapsed() < Duration::from_secs(20) && count_rows("job", None) <= jobs_before {
+                        while mode != "firstopen"
+                            && t.elapsed() < Duration::from_secs(20)
+                            && count_rows("job", None) <= jobs_before
+                        {
                             pump(&app);
                         }
-                        if count_rows("job", None) <= jobs_before {
+                        if mode != "firstopen" && count_rows("job", None) <= jobs_before {
                             failed = Some("the plugin wrote no row for the round of the late files in 20 s".into());
                             break;
                         }
@@ -1280,6 +1307,36 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                         &transport_kind,
                         transport_stop.clone(),
                     ));
+                }
+                if mode == "firstopen" {
+                    // M1d4: the host asks for the model updates (the plugin reads again there), enables the access of one source late and
+                    // replaces the audio of one source after the first round, when the command line says so
+                    doc_pump(&doc);
+                    if !access_done {
+                        if let Some((ms, k)) = access_after {
+                            if t0.elapsed().as_millis() as u64 >= ms && doc.pairs.len() > k {
+                                access_done = true;
+                                let dc = iface_of(doc.inst);
+                                (dc.enableAudioSourceSamplesAccess
+                                    .expect("enableAudioSourceSamplesAccess"))(
+                                    dc_ref_of(doc.inst), doc.pairs[k].0, 1
+                                );
+                                println!("{{\"event\":\"host_access_late\",\"source\":{k}}}");
+                            }
+                        }
+                    }
+                    if !update_handled && count_rows("job", None) > jobs_at_start && late_done {
+                        update_handled = true;
+                        if let Some((k, path)) = &update_after {
+                            if let Some(n) = update_fail_reads {
+                                *FAIL_READS.lock().unwrap() = Some((*k, n));
+                            }
+                            if let Err(e) = update_source_content(&doc, *k, path) {
+                                failed = Some(e);
+                                break;
+                            }
+                        }
+                    }
                 }
                 pump(&app);
                 let ready_now = count_rows("page_ready", None) > ready_before;
