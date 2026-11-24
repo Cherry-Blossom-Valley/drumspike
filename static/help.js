@@ -21,7 +21,7 @@
   const DAW_HTML = `<h2>Drum Spike in a DAW</h2>
     <p>In a DAW, Drum Spike is the page of a plugin window. The path has five steps:</p>
     <ol id="dawSteps">
-      <li>Put the plugin on the drum clips of the DAW. The page shows when a track with the plugin is selected.</li>
+      <li>Put the plugin on the drum clips of the DAW. The page shows the tracks that have the plugin; select one in your DAW.</li>
       <li>Wait for the analysis. The page says when the hits are ready.</li>
       <li>Check the hits and correct them.</li>
       <li>Set the note and the role of each track.</li>

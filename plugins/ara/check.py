@@ -3996,7 +3996,7 @@ def stage_switches_fault() -> bool:
 
 # ---- review round 2, item 9: no unwrap and no expect in the non-test code of the plugin
 
-UNWRAP_FILES = ["src/deliver.rs", "src/editor.rs", "src/lib.rs", "src/musical.rs", "src/playback.rs", "src/rows.rs", "src/service.rs", "src/state.rs", "src/tempo_ara.rs", "src/transport.rs", "src/wav.rs"]
+UNWRAP_FILES = ["src/deliver.rs", "src/editor.rs", "src/firstopen.rs", "src/lib.rs", "src/musical.rs", "src/playback.rs", "src/rows.rs", "src/service.rs", "src/state.rs", "src/tempo_ara.rs", "src/transport.rs", "src/wav.rs"]
 UNWRAP_PATTERN = re.compile(r"\.(unwrap|expect)\s*\(|\.unwrap_unchecked\s*\(")
 
 
@@ -7080,6 +7080,295 @@ def stage_editor_leftovers_fault() -> bool:
                      "a run with no page report fails with 'no usable run'") and ok
 
 
+# ---- M1d4 (#578): clear states at the first open
+
+# Mode `firstopen`: the editor opens BEFORE the audio (the host adds the four sources after the page booted, as `open-first` does) and the page samples what it
+# shows every 100 ms: the line over the lanes, the strip or card of each row, the lanes text, and the answer of plugin_host_states. Four runs:
+# `flow` (a slow read, a slow round), `offline` (one source gets no samples access for a while, then late), `failed` (one track fails for good: Retry runs
+# only that track) and `stale` (a content update whose reads fail: the failed row keeps its hits, the user edits it, Retry brings the new audio).
+FO_NAMES = ["Kick Room", "Snare Top", "Tom One", "Overhead Wide"]   # the DAW names of the four sources, by index
+FO_ARGS = ["--seq-names", *FO_NAMES]
+
+
+def firstopen_run(label: str, scenario: str, env: dict | None = None, extra: list | None = None) -> dict:
+    late = ["--late-files", *fixture_args(FILES), "--arg", scenario, *FO_ARGS, *(extra or [])]
+    rc, summary, rows = run_phase(label, "firstopen", CLAP, {"DS_ARA_RETRY_MS": "200", **(env or {})}, late, files=[])
+    reps = page_reports(rows, "firstopen")
+    return {"rc": rc, "rows": rows, "rep": reps[0] if reps else None, "scenario": scenario}
+
+
+def fo_flow(label: str, env: dict | None = None, page_fault: str = "") -> dict:
+    e = {"DS_ARA_SCENARIO": "slow-setup", **(env or {})}
+    if page_fault:
+        e["DS_ARA_EDITOR_FAULT"] = page_fault
+    return firstopen_run(label, "flow", e, ["--slow-read", "1:8000"])
+
+
+def fo_offline(label: str, env: dict | None = None) -> dict:
+    return firstopen_run(label, "offline", {"DS_ARA_FIRSTOPEN_MS": "wait=3000", "DS_ARA_SCENARIO": "audio-deadline-ms:25000", **(env or {})},
+                         ["--no-access", "2", "--enable-access-after", "14000:2"])
+
+
+def fo_limit(label: str, env: dict | None = None) -> dict:
+    return firstopen_run(label, "limit", {"DS_ARA_FIRSTOPEN_MS": "read=2500", **(env or {})}, ["--slow-read", "1:9000"])
+
+
+def fo_limit_parts(run: dict) -> dict:
+    bad = fo_unusable(run, ("editor-firstopen-limit",))
+    if bad:
+        return bad
+    tl, rep = run["rep"]["timeline"], run["rep"]
+    nm = FO_NAMES[1]
+    text = f"{nm}: reading or analysing took too long. Press Retry."
+    seen = fo_first(tl, lambda s: any(r["text"] == text and r["retry"] for r in s.get("rows", [])))
+    reading = fo_first(tl, lambda s: fo_row_text(s, f"{nm}: reading the audio"))
+    ans = rep.get("answers") or [{}]
+    refused = bool(ans) and ans[0].get("started") == [] and "still working" in json.dumps(ans[0].get("refused"))
+    last = tl[-1]
+    return {"editor-firstopen-limit": (
+        seen is not None and reading is not None and reading["t"] < seen["t"] and seen["t"] - reading["t"] >= 1500 and refused and (last.get("line") or "").startswith("All 4 tracks are ready") and rep.get("finished") is True,
+        f"a read with no progress for 2.5 s: the row says reading, then {'the reason and Retry' if seen else 'never failed: still reading after the limit'} ({(seen or {}).get('t')} ms, reading since {(reading or {}).get('t')} ms); "
+        f"Retry while the read still runs starts no second job ({refused}: {[a.get('started') for a in ans]}); the read is not cancelled: the document ends as {last.get('line')!r} (the real state comes back)")}
+
+
+def fo_failed(label: str, env: dict | None = None) -> dict:
+    return firstopen_run(label, "failed", {"DS_ARA_SCENARIO": "corrupt-wav:1", **(env or {})})
+
+
+def fo_stale(label: str, env: dict | None = None) -> dict:
+    return firstopen_run(label, "stale", env, ["--update-content-after", f"3:{alt_hat()}", "--update-fail-reads", "4"])
+
+
+def fo_unusable(run: dict, names: tuple) -> dict | None:
+    if run["rep"] is None or not run["rep"].get("timeline"):
+        why = f"no usable run (rc={run['rc']}, no firstopen report)"
+        return {n: (False, why) for n in names}
+    return None
+
+
+def fo_texts(s: dict) -> list:
+    """Every text of one sample that the user reads: the line and each row's strip or card."""
+    return [s.get("line") or ""] + [r["text"] for r in s.get("rows", [])]
+
+
+def fo_first(tl: list, pred) -> dict | None:
+    return next((s for s in tl if pred(s)), None)
+
+
+def fo_row_text(s: dict, text: str) -> bool:
+    return any(r["text"] == text for r in s.get("rows", []))
+
+
+def fo_changes(tl: list) -> int:
+    n = 0
+    prev: dict = {"line": None, "rows": {}}
+    for s in tl:
+        if s.get("line") != prev["line"]:
+            n += 1
+        rows = {r["row"]: r["text"] for r in s.get("rows", [])}
+        n += sum(1 for k, v in rows.items() if prev["rows"].get(k) != v)
+        prev = {"line": s.get("line"), "rows": rows}
+    return n
+
+
+def fo_lines(tl: list) -> int:
+    seen, last = 0, None
+    for s in tl:
+        if s.get("line") != last:
+            seen += 1
+            last = s.get("line")
+    return seen
+
+
+def flow_parts(run: dict) -> dict:
+    names = ("editor-firstopen-reading", "editor-firstopen-analysing", "editor-firstopen-done", "editor-firstopen-once", "editor-firstopen-never-empty")
+    bad = fo_unusable(run, names)
+    if bad:
+        return bad
+    tl, rep = run["rep"]["timeline"], run["rep"]
+    keys = track_names(FILES)
+    parts: dict = {}
+    reading = fo_first(tl, lambda s: fo_row_text(s, f"{FO_NAMES[1]}: reading the audio"))
+    n_reading = fo_first(tl, lambda s: re.fullmatch(r"Reading the audio: \d of 4 tracks\.", s.get("line") or ""))
+    parts["editor-firstopen-reading"] = (
+        reading is not None and n_reading is not None,
+        f"while the host reads the audio of the second source slowly the page shows {FO_NAMES[1]!r} as {'reading the audio' if reading else 'no reading state: no row said reading'} "
+        f"and the line {(n_reading or {}).get('line')!r} (want 'Reading the audio: n of 4 tracks.'); lines seen: {sorted({s.get('line') for s in tl if s.get('line')})[:6]}")
+    ana = [s for s in tl if re.fullmatch(r"Analysing: \d of 4 tracks\.", s.get("line") or "")]
+    ns = [int(re.search(r"(\d) of", s["line"]).group(1)) for s in ana]
+    texts = [t for s in tl for t in fo_texts(s)]
+    holds = sorted({k for k in keys for t in texts if k in t})
+    named = all(any(n in t for t in texts) for n in FO_NAMES)
+    parts["editor-firstopen-analysing"] = (
+        bool(ana) and ns == sorted(ns) and not holds and named,
+        f"the page showed {len(ana)} sample(s) of 'Analysing: n of 4 tracks.' (n never goes back: {ns == sorted(ns)}); every row text names the DAW track ({named}: {FO_NAMES}); "
+        f"texts that hold the machine name of a source: {holds or 'none'} (holds the key if listed)" + ("" if ana else "; no analysing line was shown"))
+    last = tl[-1]
+    want = f"All 4 tracks are ready: {last.get('hits')} hits."
+    parts["editor-firstopen-done"] = (
+        last.get("line") == want and last.get("hits", 0) > 0 and rep.get("finished") is True,
+        f"at the end the line says {last.get('line')!r} (want {want!r}, the hits that the page holds); finished {rep.get('finished')}; strips left: {[r['text'] for r in last.get('rows', [])]}")
+    lines, writes = fo_lines(tl), (tl[-1].get("line_writes") or 0)
+    parts["editor-firstopen-once"] = (
+        writes <= lines + 2,
+        f"the line was written {writes} times for {lines} different texts (want at most {lines + 2}: a change is written once, not at every poll; announced more than once if more)")
+    empty = [s["t"] for s in tl if not (s.get("line") or "").strip()]
+    old = [s["t"] for s in tl if "put the Drum Spike plugin on a drum track" in (s.get("lanes") or "")]
+    parts["editor-firstopen-never-empty"] = (
+        not empty and not old,
+        f"{len(tl)} samples: samples with no text on the line: {empty[:5] or 'none'}; samples with the old empty text: {old[:5] or 'none'}")
+    return parts
+
+
+def offline_parts(run: dict) -> dict:
+    names = ("editor-firstopen-waiting", "editor-firstopen-offline", "editor-firstopen-retry-offline", "editor-firstopen-late")
+    bad = fo_unusable(run, names)
+    if bad:
+        return bad
+    tl, rep = run["rep"]["timeline"], run["rep"]
+    nm = FO_NAMES[2]
+    parts: dict = {}
+    wait = fo_first(tl, lambda s: fo_row_text(s, f"{nm}: waiting for the audio from your DAW"))
+    first_line = next((s.get("line") for s in tl), None)
+    parts["editor-firstopen-waiting"] = (
+        wait is not None,
+        f"a source that the host gave no audio shows {nm!r} as waiting for the audio from your DAW"
+        + ("" if wait else f": never shown: the old empty state (the line says {first_line!r}, lanes {tl[len(tl) // 2].get('lanes', '')[:60]!r})"))
+    off_text = f"{nm}: the DAW gives no audio for this track. In the DAW, make sure the clip is on a track and its audio file is present, then press Retry."
+    off = fo_first(tl, lambda s: any(r["text"] == off_text and r["retry"] for r in s.get("rows", [])))
+    gap = (off["t"] - wait["t"]) if (off and wait) else None
+    parts["editor-firstopen-offline"] = (
+        off is not None and gap is not None and gap >= 1500,
+        f"after the wait limit (3 s) the row says what to do in the DAW and has Retry: {'seen' if off else 'never offline: still waiting after the limit'}; "
+        f"{gap} ms after the waiting state (want at least 1500); the line then says {(off or {}).get('line')!r}")
+    ans = rep.get("answers") or [{}, {}]
+    ask = fo_first(tl, lambda s: s["t"] >= rep.get("press_at", 0) and fo_row_text(s, f"{nm}: asking the DAW for the audio"))
+    off2 = fo_first(tl, lambda s: ask is not None and s["t"] > ask["t"] and any(r["text"] == off_text for r in s.get("rows", [])))
+    two = (len(ans) == 2 and len(ans[0].get("started", [])) == 1 and ans[1].get("started") == [])
+    ans2 = rep.get("answers2") or [{}]
+    again = ans2[0].get("started") == [rep.get("pressed")]
+    parts["editor-firstopen-retry-offline"] = (
+        ask is not None and off2 is not None and two and again,
+        f"after Retry the row says 'asking the DAW for the audio' ({'seen' if ask else 'never'}) and goes offline again after the wait limit ({'seen' if off2 else 'never'}); "
+        f"two presses in one go: started {[a.get('started') for a in ans]} (want one start and one refusal); a press after the wait limit started {ans2[0].get('started')} "
+        f"(want the row again: {'a dead end if it started nothing' if not again else 'ok'}; refused: {ans2[0].get('refused')})")
+    last = tl[-1]
+    last_off = max((s["t"] for s in tl if any(r["text"] == off_text for r in s.get("rows", []))), default=0)
+    left = [s for s in tl if s["t"] > last_off]
+    first_left = left[0]["t"] if left else None
+    parts["editor-firstopen-late"] = (
+        bool(left) and first_left is not None and first_left >= 12000 and (last.get("line") or "").startswith("All 4 tracks are ready") and rep.get("finished") is True,
+        f"when the DAW gives the audio late (at 14 s) the row leaves offline (at {first_left} ms, not before the audio came) and the document ends as {last.get('line')!r} (the real state comes back)")
+    return parts
+
+
+def failed_parts(run: dict) -> dict:
+    names = ("editor-firstopen-failed", "editor-firstopen-retry-one")
+    bad = fo_unusable(run, names)
+    if bad:
+        return bad
+    tl, rep, rows = run["rep"]["timeline"], run["rep"], run["rows"]
+    nm = FO_NAMES[1]
+    key = track_names(FILES)[1]
+    parts: dict = {}
+    fs = fo_first(tl, lambda s: any(r["text"].startswith(f"{nm}: ") and r["retry"] for r in s.get("rows", [])))
+    text = next((r["text"] for r in (fs or {}).get("rows", []) if r["text"].startswith(f"{nm}: ")), "")
+    parts["editor-firstopen-failed"] = (
+        fs is not None and "the analysis did not finish" in text and text.endswith("Press Retry.") and "1 of 4 tracks needs attention." == fs.get("line") and not fs.get("retry_all"),
+        f"a track that failed shows its reason in plain words and Retry: {text!r} (want the reason 'the analysis did not finish' and 'Press Retry.' - no reason if it says only failed); "
+        f"line {(fs or {}).get('line')!r}; Retry all shown {(fs or {}).get('retry_all')} (want no, only one row failed)")
+    ans = rep.get("answers") or [{}, {}]
+    before, after = rep.get("before") or {}, rep.get("after") or {}
+    others = [k for k in before if k != key]
+    same = bool(others) and all(before.get(k) == after.get(k) for k in others)
+    i = next((n for n, r in enumerate(rows) if r.get("event") == "state_retry"), None)
+    later = rows[i:] if i is not None else []
+    analysed = sorted({t for r in later if r.get("event") == "job" for t in (r.get("analysed") or [])})
+    rounds = sum(1 for r in later if r.get("event") == "round_start")
+    edited = rep.get("edited") or {}
+    kept = False
+    if edited.get("name") and after.get(edited["name"]):
+        try:
+            kept = any(abs(e["t"] - edited["to"]) < 1e-4 for e in json.loads(after[edited["name"]])["events"])
+        except (ValueError, KeyError):
+            kept = False
+    started = [a.get("started") for a in ans]
+    parts["editor-firstopen-retry-one"] = (
+        started == [[rep.get("pressed")], []] and same and kept and set(analysed) <= {key} and rounds == 1,
+        f"Retry started {started} (want only the failed row, then a refusal for the second press); the events of the {len(others)} other tracks are byte for byte the same before and after ({same}), "
+        f"the hit that the user moved on a finished track is still there ({kept}); the round after the press analysed {analysed} (want only {key!r}: other tracks touched if more) "
+        f"in {rounds} round(s) (want 1)")
+    return parts
+
+
+def stale_parts(run: dict) -> dict:
+    names = ("editor-firstopen-stale", "editor-firstopen-handles")
+    bad = fo_unusable(run, names)
+    if bad:
+        return bad
+    tl, rep = run["rep"]["timeline"], run["rep"]
+    nm = FO_NAMES[3]
+    key = track_names(FILES)[3]
+    parts: dict = {}
+    fs = fo_first(tl, lambda s: any(r["text"].startswith(f"{nm}: ") and r["retry"] for r in s.get("rows", [])))
+    text = next((r["text"] for r in (fs or {}).get("rows", []) if r["text"].startswith(f"{nm}: ")), "")
+    edited = rep.get("edited") or {}
+    after = rep.get("after") or {}
+    kept = False
+    try:
+        kept = any(abs(e["t"] - edited["to"]) < 1e-4 for e in json.loads(after[edited["name"]])["events"])
+    except (ValueError, KeyError, TypeError):
+        kept = False
+    held = (fs or {}).get("events_n", {}).get(key, 0)
+    parts["editor-firstopen-stale"] = (
+        fs is not None and text.endswith("The hits shown are from before.") and held > 0 and edited.get("name") == key and kept and (tl[-1].get("line") or "").startswith("All 4 tracks are ready"),
+        f"a row whose new audio could not be read keeps its {held} hits on the page and says {text!r} (want '... The hits shown are from before.'); "
+        f"the hit that the user moved on that row is still in the events after Retry brought the new audio ({kept}); the document ends as {tl[-1].get('line')!r}")
+    ready = [s["t"] for s in tl for h in (s.get("handles") or [])
+             if h["midi"] == "ready" and any(p["id"] == h["id"] and p["state"] != "done" for p in (s.get("plugin") or {}).get("rows", []))]
+    parts["editor-firstopen-handles"] = (
+        fs is not None and not ready,
+        f"a row that is not done has no ready drag handle: samples with a ready handle on a row that is not done: {ready[:5] or 'none'} (ready handle before done if listed)")
+    return parts
+
+
+def stage_editor_firstopen() -> bool:
+    if _reference() is None or not HOST.exists():
+        return pass_fail("editor-firstopen", False, "no reference or host")
+    ok = print_parts("", flow_parts(fo_flow("editor-firstopen-flow")))
+    ok = print_parts("", offline_parts(fo_offline("editor-firstopen-offline"))) and ok
+    ok = print_parts("", failed_parts(fo_failed("editor-firstopen-failed"))) and ok
+    ok = print_parts("", fo_limit_parts(fo_limit("editor-firstopen-limit"))) and ok
+    return print_parts("", stale_parts(fo_stale("editor-firstopen-stale"))) and ok
+
+
+def stage_editor_firstopen_fault() -> bool:
+    ok = True
+    flow = {"left-key": ({"DS_ARA_FIRSTOPEN_FAULT": "left-key"}, "editor-firstopen-analysing", "a row names the machine name of its source", "holds the key"),
+            "no-reading": ({"DS_ARA_FIRSTOPEN_FAULT": "no-reading"}, "editor-firstopen-reading", "a read shows as waiting", "no reading state"),
+            "old-empty": ({"DS_ARA_FIRSTOPEN_FAULT": "old-empty"}, "editor-firstopen-reading", "a source with no track gives no state: the old empty page", "no reading state")}
+    for label, (env, part, what, reason) in flow.items():
+        ok = fault_reason(f"editor-firstopen-fault-{label}", flow_parts(fo_flow(f"editor-firstopen-fault-{label}", env)), part, what, reason) and ok
+    ok = fault_reason("editor-firstopen-fault-announce", flow_parts(fo_flow("editor-firstopen-fault-announce", None, "first-announce")), "editor-firstopen-once",
+                      "the page writes the line at every poll", "announced more than once") and ok
+    ok = fault_reason("editor-firstopen-fault-old-empty-waiting", offline_parts(fo_offline("editor-firstopen-fault-old-empty", {"DS_ARA_FIRSTOPEN_FAULT": "old-empty"})),
+                      "editor-firstopen-waiting", "a source with no track gives no state", "the old empty state") and ok
+    ok = fault_reason("editor-firstopen-fault-no-limit", offline_parts(fo_offline("editor-firstopen-fault-no-limit", {"DS_ARA_FIRSTOPEN_FAULT": "no-limit"})),
+                      "editor-firstopen-offline", "no time limit fires", "still waiting after the limit") and ok
+    ok = fault_reason("editor-firstopen-fault-retry-dead-end", offline_parts(fo_offline("editor-firstopen-fault-retry-dead-end", {"DS_ARA_FIRSTOPEN_FAULT": "retry-dead-end"})),
+                      "editor-firstopen-retry-offline", "a press of Retry never ends", "a dead end if it started nothing") and ok
+    ok = fault_reason("editor-firstopen-fault-no-reason", failed_parts(fo_failed("editor-firstopen-fault-no-reason", {"DS_ARA_FIRSTOPEN_FAULT": "no-reason"})),
+                      "editor-firstopen-failed", "a failed row says no reason", "no reason if it says only failed") and ok
+    ok = fault_reason("editor-firstopen-fault-retry-all", failed_parts(fo_failed("editor-firstopen-fault-retry-all", {"DS_ARA_FIRSTOPEN_FAULT": "retry-all-tracks"})),
+                      "editor-firstopen-retry-one", "Retry runs for every track", "other tracks touched") and ok
+    ok = fault_reason("editor-firstopen-fault-handle-early", stale_parts(fo_stale("editor-firstopen-fault-handle-early", {"DS_ARA_FIRSTOPEN_FAULT": "handle-early"})),
+                      "editor-firstopen-handles", "a drag handle is ready before its row is done", "ready handle before done") and ok
+    ok = fault_reason("editor-firstopen-fault-no-limit-read", fo_limit_parts(fo_limit("editor-firstopen-fault-no-limit-read", {"DS_ARA_FIRSTOPEN_FAULT": "no-limit"})),
+                      "editor-firstopen-limit", "no time limit fires", "still reading after the limit") and ok
+    parts = flow_parts({"rc": 2, "rows": [], "rep": None})
+    return pass_fail("editor-firstopen-fault-norun", all((not g) and "no usable run" in ev for g, ev in parts.values()), "a run with no page report fails with 'no usable run'") and ok
+
+
 # ---- M1b10 item 8: the role of a track follows the name of the DAW track
 
 # The sources have machine names (32 hex characters). The DAW tracks are named like a kick, a snare, a hi-hat
@@ -8949,6 +9238,8 @@ STAGES = {
     "editor-names-fault": stage_editor_names_fault,
     "editor-leftovers": stage_editor_leftovers,
     "editor-leftovers-fault": stage_editor_leftovers_fault,
+    "editor-firstopen": stage_editor_firstopen,
+    "editor-firstopen-fault": stage_editor_firstopen_fault,
     "editor-roles": stage_editor_roles,
     "restore-settings": stage_restore_settings,
     "restore-settings-fault": stage_restore_settings_fault,
@@ -9003,7 +9294,7 @@ ORDER = [
     "editor-hit", "editor-hit-fault", "editor-geometry", "editor-geometry-fault", "editor-menu", "editor-menu-fault",
     "editor-selection", "editor-selection-fault",
     "editor-keys", "editor-keys-fault", "editor-keys-twin", "editor-keys-twin-fault",
-    "editor-names", "editor-names-fault", "editor-song-rows", "editor-song-rows-fault", "editor-leftovers", "editor-leftovers-fault", "editor-roles", "editor-roles-fault", "restore-settings", "restore-settings-fault",
+    "editor-names", "editor-names-fault", "editor-song-rows", "editor-song-rows-fault", "editor-leftovers", "editor-leftovers-fault", "editor-firstopen", "editor-firstopen-fault", "editor-roles", "editor-roles-fault", "restore-settings", "restore-settings-fault",
     "drag-source", "drag-source-fault", "delivery", "delivery-release", "delivery-fault", "export-dialog", "export-dialog-fault", "deliver", "deliver-fault",
     "switches", "switches-fault", "no-unwrap", "no-unwrap-fault",
     "delivery-switches", "delivery-switches-fault", "bundle-version", "bundle-version-fault",

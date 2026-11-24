@@ -285,7 +285,7 @@ def test_the_daw_help_is_a_path_of_five_steps(host):
     host.wait_for_selector("#helpPage #dawSteps")
     steps = host.evaluate("() => [...document.querySelectorAll('#dawSteps li')].map(l => l.textContent)")
     assert len(steps) == 5, steps
-    for step, words in zip(steps, (["plugin", "drum clips", "track with the plugin is selected"], ["analysis"], ["Check", "correct"], ["note", "role"], ["MIDI", "spikes", "start of the session"])):
+    for step, words in zip(steps, (["plugin", "drum clips", "tracks that have the plugin", "select one in your DAW"], ["analysis"], ["Check", "correct"], ["note", "role"], ["MIDI", "spikes", "start of the session"])):
         assert all(w in step for w in words), (step, words)
 
 
@@ -299,6 +299,7 @@ def test_the_first_open_line_names_the_first_step_and_goes_after_the_first_actio
     host.evaluate("async () => { document.getElementById('hostIntro')?.remove(); await B.appSettingsSet('host_intro_done', false); await hostIntroInit(); }")
     line = host.locator("#hostIntro")
     assert line.count() == 1 and "Step 1 of 5" in line.inner_text() and "plugin" in line.inner_text() and "drum clips" in line.inner_text()
+    assert "select one in your DAW" in line.inner_text(), "#578 (R6): the line says that the page shows the tracks that have the plugin"
     assert host.evaluate("() => document.querySelectorAll('#hostIntro').length") == 1
     host.keyboard.press("ArrowRight")
     assert host.locator("#hostIntro").count() == 0

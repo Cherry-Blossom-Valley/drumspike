@@ -11,12 +11,16 @@
    what to do in the DAW; while the first analysis runs it says that it runs. */
 const HOST_EMPTY = "No drum tracks yet. In your DAW, put the Drum Spike plugin on a drum track.";
 const HOST_EMPTY_BUSY = "Analyzing the drum tracks. The hits appear here when it is done.";
-function hostEmptyText() { return analysisRunning ? HOST_EMPTY_BUSY : HOST_EMPTY; }
+function hostEmptyText() {
+  if (typeof HST !== "undefined" && HST.ready && !HST.absent) return HST.error || HST.docText() || "Checking the tracks of your DAW…";   // #578: the plugin says what happens and what to do
+  return analysisRunning ? HOST_EMPTY_BUSY : HOST_EMPTY;
+}
 function hostEmptyRefresh() {   // the text follows the analysis state (setAnalysisButtons)
   const el = document.querySelector(".empty-state.hostEmpty");
   if (el && el.textContent !== hostEmptyText()) el.textContent = hostEmptyText();
 }
 function renderHostEmpty(scroll) {
+  if (typeof HST !== "undefined" && HST.ready && HST.hasRows()) { HST.paint(); return; }   // #578: the cards of the DAW tracks say what happens
   const box = document.createElement("div"); box.className = "empty-state hostEmpty";
   box.textContent = hostEmptyText();
   scroll.appendChild(box);
@@ -112,6 +116,7 @@ function buildTrackDOM() {
   }
   refreshCounts();
   document.querySelectorAll(".track").forEach(r => r.classList.toggle("selTrack", r.dataset.name === S.selTrack));   // P4-39c: the first track is selected at open
+  if (typeof HST !== "undefined") HST.paint();   // #578: the states of the first open again for the new DOM rows (nothing with the mode off)
   HT.rebuild(); HT.paint();   // #555: the rows of the DAW tracks again for the new DOM rows (nothing with the mode off)
   hostSelReapply();   // #562: the rows are new: the marks and the hidden tracks of the DAW selection again (nothing with the mode off)
   syncInspector(true);   // P3-14a: the rows are new; the Inspector shows the selected track or its empty state

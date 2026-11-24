@@ -2,7 +2,7 @@
    test switch DS_ARA_EDITOR_MODE is set (a real host sets none). It runs on the real page and
    reports to the plugin through window.ipc (rows "page_report" of the plugin's report).
    window.__DS_TEST__ = {mode, arg, fault} comes from the plugin.
-   Modes: ready (boot report only), measure, keys, focus, resize, edit, shell, analyse, net, and (M1b11) hit, menu, geometry, (M1b13) selection, (M1d1) leftovers. */
+   Modes: ready (boot report only), measure, keys, focus, resize, edit, shell, analyse, net, and (M1b11) hit, menu, geometry, (M1b13) selection, (M1d1) leftovers, (M1d4) firstopen. */
 (function () {
   "use strict";
   var T = window.__DS_TEST__ || { mode: "ready", arg: "", fault: "" };
@@ -37,7 +37,7 @@
     (function poll() {
       var loaded = false;
       try { loaded = typeof S !== "undefined" && S.loaded > 0; } catch (e) { /* not yet */ }
-      if (loaded || performance.now() - t0 > (T.mode === "open-first" ? 2500 : (deadlineMs || 15000))) fn(loaded);
+      if (loaded || performance.now() - t0 > (T.mode === "open-first" || T.mode === "firstopen" ? 2500 : (deadlineMs || 15000))) fn(loaded);
       else setTimeout(poll, 100);
     })();
   }
@@ -84,6 +84,7 @@
     if (T.mode === "exportdialog") exportDialogRun(names).catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
     if (T.mode === "delivery") deliveryRun(names).catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
     if (T.mode === "deliver") deliverRun().catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
+    if (T.mode === "firstopen") firstopenRun().catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
     if (T.mode === "leftovers") leftoversRun().catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
     if (T.mode === "selection") selectionRun().catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
     if (T.mode === "song") songRun().catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
@@ -614,6 +615,74 @@
     out.take_merged_after = await inv("plugin_deliver_take", { items: [{ row: "", kind: "merged" }] });
     out.dom3 = dom();
     post(Object.assign({ kind: "deliver" }, out));
+  }
+  /* Mode firstopen (M1d4, #578): the page at the first open. The driver samples what the page shows (the line over the lanes, the strips and cards of the
+     rows, the text of the lanes) and what the plugin answers to plugin_host_states every 100 ms and reports the timeline in ONE report `firstopen`.
+     The argument (T.arg) names the scenario: `flow` (until the document is done), `limit` (a read with no progress turns failed after the limit; Retry is refused while the read still runs; the read ends and the real state comes back), `stale` (a failed row that keeps old hits; the user edits it, Retry brings the new audio), `offline` (the first row that is offline gets Retry twice, fast; the
+     host's late access then brings the real state back) and `failed` (the same for a row that failed; the events of every track are read before and
+     after the press, and one track is edited before it). Fault runs: DS_ARA_EDITOR_FAULT=first-announce (the line is written at every poll). */
+  async function firstopenRun() {
+    if (T.fault === "first-announce") HST.fault = "first-announce";
+    var inv = window.__TAURI__.core.invoke, mode = T.arg || "flow", t0 = performance.now(), timeline = [], pressed = null, answers = null;
+    var before = null, after = null, edited = null, seenAttention = false, pressAt = 0, attentionAt = 0, answers2 = null;
+    function dom() {
+      var line = document.getElementById("hstLine"), rows = [].map.call(document.querySelectorAll("#lanesScroll .hostState, #lanesScroll .hostCard"), function (e) {
+        return { row: e.dataset.row, state: e.dataset.state, text: e.querySelector(".hstRowText").textContent, retry: !!e.querySelector(".hstRetry") };
+      });
+      return { line: line ? line.querySelector(".hstText").textContent : null, lstate: line ? line.dataset.state : null, retry_all: !!(line && line.querySelector(".hstRetryAll")),
+        rows: rows, lanes: String(document.getElementById("lanesScroll").innerText || "").slice(0, 400), tracks: (S.order || []).length, writes: HST.writes,
+        line_writes: HST.lineWrites, hits: (S.order || []).reduce(function (a, n) { return a + (S.events[n] || []).length; }, 0),
+        events_n: (S.order || []).reduce(function (o, n) { o[n] = (S.events[n] || []).length; return o; }, {}),
+        handles: DLV && DLV.st ? DLV.st.rows.map(function (r) { return { id: r.id, midi: r.midi.state }; }) : null };
+    }
+    async function eventsOf() {
+      var out = {};
+      for (var i = 0; i < (S.order || []).length; i++) { try { out[S.order[i]] = (await raw("events_get", { sid: S.sid, name: S.order[i] })).text; } catch (e) { out[S.order[i]] = null; } }
+      return out;
+    }
+    var limit = mode === "flow" ? 60000 : 45000, finished = false;
+    while (performance.now() - t0 < limit && !finished) {
+      var st = null;
+      try { st = await inv("plugin_host_states", {}); } catch (e) { st = { error: String(e && e.message || e) }; }
+      var d = dom();
+      timeline.push(Object.assign({ t: Math.round(performance.now() - t0), plugin: st && st.doc ? { state: st.doc.state, text: st.doc.text, rows: st.rows.map(function (r) { return { id: r.id, state: r.state, name: r.name, retry: r.retry, hits: r.hits }; }) } : st }, d));
+      // the press waits until the PAGE shows the row with its Retry button: the plugin may be ahead of the page by a poll
+      var need = st && st.rows ? st.rows.filter(function (r) { return r.retry && d.rows.some(function (x) { return x.row === r.id && x.retry; }); }) : [];
+      if (need.length && !attentionAt) attentionAt = performance.now();
+      // `stale`: the row stays failed for a while before the press, so the files of the drag handles are made (they must stay not ready)
+      if (mode !== "flow" && need.length && !pressed && (mode !== "stale" || performance.now() - attentionAt > 7000)) {
+        seenAttention = true;
+        if (mode === "failed" || mode === "stale") {
+          try { before = await eventsOf(); } catch (e) { before = null; }
+          // one track is edited by the user before the press: the edit must survive a failure and the retry
+          try {
+            var done0 = S.order.find(function (n) { return (mode === "stale" ? n === (need[0].srcs || [])[0] : n !== (need[0].srcs || [])[0]) && (S.events[n] || []).length > 1; });
+            if (done0) {
+              var evs = JSON.parse((await raw("events_get", { sid: S.sid, name: done0 })).text).events;
+              await B.eventsEdit(S.sid, done0, [{ op: "move", index: 1, t: evs[1].t + 0.01 }]);
+              edited = { name: done0, from: evs[1].t, to: evs[1].t + 0.01 };
+              before = await eventsOf();
+            }
+          } catch (e) { edited = { error: String(e && e.message || e) }; }
+        }
+        pressAt = performance.now() - t0;
+        // two presses in one go: the second must start no second job
+        var a = inv("plugin_host_retry", { rows: [need[0].id] }), b = inv("plugin_host_retry", { rows: [need[0].id] });
+        answers = [await a, await b]; pressed = need[0].id;
+      }
+      // the document is done AND the page has loaded the project (its tracks and their hits): the plugin is ahead of the page by a reload
+      // `offline`: after the wait limit the row is offline again with Retry: a second press (M1) must start a job again
+      if (mode === "offline" && pressed && !answers2 && performance.now() - t0 - pressAt > 3600 && need.some(function (r) { return r.id === pressed; })) {
+        answers2 = [await inv("plugin_host_retry", { rows: [pressed] })];
+      }
+      if (mode === "flow" && st && st.doc && st.doc.state === "done" && d.tracks >= st.rows.length && d.hits > 0 && d.line === st.doc.text) finished = true;
+      if ((mode === "offline" || mode === "stale" || mode === "limit") && pressed && st && st.doc && st.doc.state === "done") finished = true;
+      if (mode === "failed" && pressed && performance.now() - t0 - pressAt > 9000) finished = true;
+      if (!finished) await new Promise(function (r) { setTimeout(r, 100); });
+    }
+    if (mode === "failed" || mode === "stale") { try { after = await eventsOf(); } catch (e) { after = null; } }
+    post({ kind: "firstopen", mode: mode, timeline: timeline, pressed: pressed, press_at: Math.round(pressAt), answers: answers, answers2: answers2, seen_attention: seenAttention,
+      before: before, after: after, edited: edited, order: S.order || [], writes: HST.writes, finished: finished });
   }
   /* Mode leftovers (M1d1, #575): the page shows the name of the DAW track where it names a track (progress, info line, status bar, undo label,
      follower text, export dialog, Follow menu), and after the host changed the audio of one source it says what happened. The first report

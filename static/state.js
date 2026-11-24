@@ -215,7 +215,7 @@ function hostApply() {
    The line names the first of the five steps of the help ("DAW" section of help.js) and goes away after the first action of the user (a click or a
    key in the page); the service settings keep that it went (`host_intro_done`), so the next opening of the editor of the document does not show it.
    A key or a click of the DAW does not reach this page. */
-const HOST_INTRO_TEXT = "Step 1 of 5: put the plugin on the drum clips. Help shows all five steps.";
+const HOST_INTRO_TEXT = "Step 1 of 5: put the plugin on the drum clips. The page shows the tracks that have the plugin; select one in your DAW. Help shows all five steps.";
 async function hostIntroInit() {
   if (!hostMode() || document.getElementById("hostIntro")) return;
   let done = false;

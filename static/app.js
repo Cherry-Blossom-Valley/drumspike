@@ -784,6 +784,7 @@ function rulerDown(ev) {   // the time ruler and the Bars|Beats ruler (P4-8): a 
   hostMenuInit();   // #559: the menu button of the host mode (returns at once with the mode off)
   hostDefaultsInit();   // #577: the user defaults of the plugin (returns at once with the mode off)
   hostSelInit();   // #562: the follow of the DAW selection (returns at once with the mode off)
+  hostStateInit();   // #578: the states of the first open (returns at once with the mode off)
   DLV.init();   // #576: the drag handles of the DAW (returns at once with the mode off)
   HT.init();   // #555: the rows of the DAW tracks in song time (returns at once with the mode off)
   hostApply();   // #539: the page of the host mode (a class on <body>, the controls of the list hidden) before the first layout

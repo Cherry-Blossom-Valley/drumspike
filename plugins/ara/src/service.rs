@@ -479,6 +479,8 @@ pub struct DocService {
     failed_once: bool,
     /// How many rounds `DS_ARA_SCENARIO=fail-rounds:<n>` has failed.
     failed_rounds: usize,
+    /// M1d4 (#578): the creation indexes of the sources whose tracks the next round analyses (a Retry of a failed track); `None`: every track.
+    only: Option<Vec<usize>>,
     canceller: Canceller,
     /// The editor's way to the service (see [`PageHandle`]).
     page: std::sync::Arc<PageHandle>,
@@ -666,6 +668,7 @@ impl DocService {
             save_owed: false,
             failed_once: false,
             failed_rounds: 0,
+            only: None,
             canceller: Canceller::default(),
             page,
             fail_restores: 0,
@@ -677,6 +680,10 @@ impl DocService {
     /// the archive holds with no result, or a source whose track record was lost in a round (`forget_track`). The caller replaces the whole map
     /// before each round; `analyse` lays an entry over the new record of exactly that source and drops the entries of sources that are gone.
     /// A source that is not in the map (a new clip, a source that the DAW removed and made again) gets the user defaults.
+    pub fn only_sources(&mut self, only: Option<Vec<usize>>) {
+        self.only = only;
+    }
+
     pub fn keep_settings(&mut self, kept: HashMap<usize, Map<String, Value>>) {
         self.kept = kept;
     }
@@ -851,6 +858,11 @@ impl DocService {
     /// takes them again.
     pub fn analyse(&mut self, snaps: &[SourceSnapshot], force: bool) -> Result<JobResult, String> {
         let started = std::time::Instant::now();
+        // M1d4: a Retry names the sources it is for; the other tracks are not analysed again (the fault run `retry-all-tracks` ignores it)
+        let only = self
+            .only
+            .take()
+            .filter(|_| switch("DS_ARA_FIRSTOPEN_FAULT").as_deref() != Some("retry-all-tracks"));
         if self.canceller.cancelled() {
             return Err("the analysis was cancelled before it started".into());
         }
@@ -1084,6 +1096,9 @@ impl DocService {
         let mut skipped: Vec<(String, String)> = Vec::new();
         for (name, seq) in &self.tracks {
             if only_new && !names.contains(name) {
+                continue;
+            }
+            if only.as_ref().is_some_and(|o| !o.contains(seq)) {
                 continue;
             }
             match self.snaps.get(seq).map(SourceSnapshot::audio_problem) {
