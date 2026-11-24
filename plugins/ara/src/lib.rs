@@ -4634,18 +4634,26 @@ fn kept_for_round(
     }
     let mut out = kept_seq.clone();
     for (seq, track) in live {
-        let Some(own) = track
-            .as_ref()
-            .and_then(|t| settings.get(t).and_then(Value::as_object))
-            .filter(|o| !o.is_empty())
-        else {
+        // a source without a track name had no round yet: its archive entry serves and stays
+        let Some(t) = track.as_ref() else {
             continue;
         };
+        let own = settings.get(t).and_then(Value::as_object).filter(|o| !o.is_empty());
         if f == "kept-stale" {
-            out.entry(*seq).or_insert_with(|| own.clone());
-        } else {
-            out.insert(*seq, own.clone());
-            kept_seq.remove(seq);
+            if let Some(own) = own {
+                out.entry(*seq).or_insert_with(|| own.clone());
+            }
+            continue;
+        }
+        // a source with a track name had its round: the archive entry is used up, also when the document holds no values for it
+        kept_seq.remove(seq);
+        match own {
+            Some(own) => {
+                out.insert(*seq, own.clone());
+            }
+            None => {
+                out.remove(seq);
+            }
         }
     }
     out
@@ -5968,6 +5976,22 @@ mod tests {
         assert!(kept.is_empty(), "the used entry is gone");
         let out = kept_for_round(&mut kept, &[(1, Some("b".into()))], &[1], &settings);
         assert_eq!(out.get(&1), Some(&m(45)));
+    }
+
+    /// Round 4: a source that had its round and whose document values are gone never gets the old archive entry again.
+    #[test]
+    fn a_source_with_a_track_and_no_document_values_never_gets_the_old_archive_entry() {
+        let mut kept = HashMap::from([(1usize, m(41)), (2usize, m(38))]);
+        let none = serde_json::Map::new();
+        let out = kept_for_round(&mut kept, &[(1, Some("b".into())), (2, None)], &[1, 2], &none);
+        assert_eq!(
+            out.get(&1),
+            None,
+            "no stale archive values for a source that had its round"
+        );
+        assert_eq!(out.get(&2), Some(&m(38)), "a source without a round keeps its entry");
+        assert_eq!(kept.len(), 1, "only the used-up entry is gone");
+        assert!(kept.contains_key(&2));
     }
 
     /// Round 3 D: a change of the export settings between the read and the write is not overwritten by the older read.

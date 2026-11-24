@@ -8705,7 +8705,7 @@ def stage_editor_defaults() -> bool:
     rc_none, _t = layer_run("editor-defaults-nodir", "defaults_layer_get_save", with_dir=False)
     ran = "defaults_layer_get_save_preset_collision_delete_and_hostile_name ... ok" in text
     ok = pass_fail("editor-defaults-needs-dir", rc_none != 0, f"the same test without DS_ARA_USER_DIR fails, it does not pass early (rc={rc_none})")
-    ok = pass_fail("editor-defaults", rc == 0 and ran, f"get, save role, preset save, collision refused, delete, hostile name `../x`: rc={rc}, the test ran and passed: {ran}")
+    ok = pass_fail("editor-defaults", rc == 0 and ran, f"get, save role, preset save, collision refused, delete, hostile name `../x`: rc={rc}, the test ran and passed: {ran}") and ok
     rc2, text2 = layer_run("editor-defaults-nofolder", "defaults_layer_answers", with_dir=False)
     ran2 = "defaults_layer_answers_without_a_folder_and_never_panics ... ok" in text2
     return pass_fail("editor-defaults-nofolder", rc2 == 0 and ran2, f"with no folder the page gets `nofolder` and a save says why: rc={rc2}, passed: {ran2}") and ok
