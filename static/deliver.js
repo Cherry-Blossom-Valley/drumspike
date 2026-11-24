@@ -13,7 +13,13 @@ const DLV = {
   poll: null,        // the timer that asks again while a handle is preparing (the page never shows a dead "preparing…")
   menuFor: null,
 };
-const DLV_KINDS = [["midi", "MIDI", "MIDI"], ["spike", "Spike", "Spike"], ["audio", "Audio spike", "Audio spike"]];
+const DLV_KINDS = [["midi", "MIDI", "MIDI"], ["spike", "Spike", "Spike"], ["audio", "Audio spike", "Audio"]];   // key, full label (tooltip, menu, screen reader), small label of the row header (#592)
+/* #592: the icons of the three kinds in a row header (inline SVG, no image files): a note, one spike on a line, a waveform. */
+const DLV_ICONS = {
+  midi: '<path d="M5 11.2V3l6-1.4v8.2"/><ellipse cx="3.6" cy="11.2" rx="1.6" ry="1.2" fill="currentColor"/><ellipse cx="9.6" cy="9.8" rx="1.6" ry="1.2" fill="currentColor"/>',
+  spike: '<path d="M1 11.5h5l1-9.5 1 9.5h5"/>',
+  audio: '<path d="M1.5 6v2M4 4v6M6.5 2v10M9 4.5v5M11.5 3v8M13.5 6v2"/>',
+};
 const DLV_HINT = "Drop at the start of the session";
 const DLV_TEMPO = "If your DAW asks about the tempo of this MIDI, choose the current tempo map.";
 
@@ -39,6 +45,9 @@ DLV.text = function (s) {
   const w = `error: ${s.why || "could not be prepared"}`;
   return w.length > 40 ? w.slice(0, 37) + "…" : w;
 };
+/* The badge of a handle in a row header (#592: the header is 230 px wide, three handles with the whole state text do not fit and lay on the
+   role drawing): the count when ready, else one sign. The whole text stays in the tooltip, in the screen reader label and in `.dlvT`. */
+DLV.badge = s => (s.state === "ready" ? String(s.n) : s.state === "preparing" ? "…" : s.state === "off" ? "+" : s.state === "error" ? "!" : "–");
 DLV.title = function (label, s, extra) {   // no word "file" or "folder" in what the user reads (the host page test of the visible words)
   const why = s.state === "error" ? `error: ${s.why}. Press to try again` : s.state === "none" ? "no hits" : s.state === "off" ? "press to prepare (a press starts it)" : s.state === "preparing" ? "preparing: made in the background" : `ready (${s.n}). Drag it into your DAW with the mouse. Keyboard: use Export… (Cmd+E)`;
   return `${label}: ${why}. ${DLV_HINT}.${extra ? " " + extra : ""}`;
@@ -81,16 +90,22 @@ DLV.keys = function (el, get, act) {
 DLV.act = wants => () => { wants.forEach(w => DLV.want(w.kind, w.row)); };
 
 /* One handle element. `get()` gives its state; `items()` the items of a drag; `wants` what a press starts. */
-DLV.handle = function (label, kind, get, items, extra, wants) {
+DLV.handle = function (label, kind, get, items, extra, wants, small) {
   const h = document.createElement("div");
   h.className = "dlvH"; h.dataset.kind = kind; h.draggable = false;
   h.setAttribute("role", "button"); h.tabIndex = 0;
-  const lb = document.createElement("span"); lb.className = "dlvL"; lb.textContent = label;
+  const lb = document.createElement("span"); lb.className = "dlvL"; lb.textContent = small || label;
   const tx = document.createElement("span"); tx.className = "dlvT";
-  h.append(lb, tx);
+  const bd = document.createElement("span"); bd.className = "dlvB"; bd.setAttribute("aria-hidden", "true");
+  h.append(lb, tx, bd);
+  if (small && DLV_ICONS[kind]) {   // a row header: the icon and the badge over a small label
+    const ic = document.createElement("span"); ic.className = "dlvI"; ic.setAttribute("aria-hidden", "true");
+    ic.innerHTML = `<svg viewBox="0 0 15 14" fill="none" stroke="currentColor" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round">${DLV_ICONS[kind]}</svg>`;
+    h.prepend(ic); h.classList.add("dlvTile");
+  }
   h._paint = () => {
     const s = get();
-    h.dataset.state = s.state; tx.textContent = DLV.text(s); h.title = DLV.title(label, s, extra);
+    h.dataset.state = s.state; tx.textContent = DLV.text(s); bd.textContent = DLV.badge(s); h.title = DLV.title(label, s, extra);
     h.setAttribute("aria-label", `${label}, ${s.state === "error" ? "error, press to retry" : DLV.text(s)}`);
   };
   const act = DLV.act(wants || [{ kind }]);
@@ -155,15 +170,15 @@ DLV.collapsed = function (th) {
 };
 
 /* The strip of one row header. */
-DLV.strip = function (rowEl, name) {
+DLV.strip = function (rowEl, name, narrow) {
   const row = DLV.rowFor(name), th = rowEl.querySelector(".thead");
   let old = th.querySelector(".tdel"); if (old) old.remove();
   if (!row) return;
   const strip = document.createElement("div"); strip.className = "tdel";
   const cur = () => DLV.rowFor(name) || row;
   const get = k => () => { const r = DLV.rowFor(name); return r ? r[k] : { state: "none", n: 0, why: "" }; };
-  const hs = DLV_KINDS.map(([k, label]) => DLV.handle(label, k, get(k), () => DLV.rowItems(cur(), [k]), k === "midi" ? DLV_TEMPO : "", [{ kind: k, row: row.id }]));
-  if (DLV.collapsed(th)) {
+  const hs = DLV_KINDS.map(([k, label, small]) => DLV.handle(label, k, get(k), () => DLV.rowItems(cur(), [k]), k === "midi" ? DLV_TEMPO : "", [{ kind: k, row: row.id }], small));
+  if (narrow || DLV.collapsed(th)) {
     // one handle (the first kind that is ready, MIDI then Spike) and a small menu with the three
     const pick = () => ["midi", "spike", "audio"].find(k => cur()[k].state === "ready") || "midi";
     const one = DLV.handle("Drag", "one", () => cur()[pick()], () => DLV.rowItems(cur(), [pick()]), "", [{ kind: "midi", row: row.id }]);
@@ -178,6 +193,8 @@ DLV.strip = function (rowEl, name) {
   } else { strip.append(...hs); strip._hs = hs; }
   th.appendChild(strip);
   strip._hs.forEach(h => h._paint());
+  // #592: the three never run out of their place: when they do not fit (long counts) the row gets the one handle with the menu
+  if (!narrow && !strip.classList.contains("collapsed") && strip.scrollWidth > strip.clientWidth + 1) DLV.strip(rowEl, name, true);
 };
 
 /* The toolbar. */
