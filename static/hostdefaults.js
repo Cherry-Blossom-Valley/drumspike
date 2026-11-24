@@ -245,8 +245,7 @@ function hdOpenSave() {
 
 async function hostDefaultsInit() {
   if (!hostMode() || !B.defaultsGet) return;
-  const d = await hdLoad();
-  void d;
+  await hdLoad();
   hdInspectorSync();
 }
 

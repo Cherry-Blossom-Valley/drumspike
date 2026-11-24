@@ -2544,9 +2544,25 @@ mod tests {
             .map(PathBuf::from)
     }
 
+    /// The folder of a stage run, and nothing else: a folder named `user-*` directly below a folder named `out`. The tests below empty it; they never
+    /// delete a path that the environment names unless it has this shape (a plain `cargo test` with the variable set to a real folder fails here).
+    fn stage_folder() -> PathBuf {
+        let d = layer_folder()
+            .expect("DS_ARA_USER_DIR must be set: these tests are run by the stage editor-defaults of check.py (cargo test -- --ignored)");
+        let ok = d.file_name().is_some_and(|n| n.to_string_lossy().starts_with("user-"))
+            && d.parent().and_then(Path::file_name).is_some_and(|n| n == "out");
+        assert!(
+            ok,
+            "refusing to empty {}: not a user-* folder below an out folder",
+            d.display()
+        );
+        d
+    }
+
     #[test]
+    #[ignore = "run by the stage editor-defaults (needs DS_ARA_USER_DIR below out/)"]
     fn defaults_layer_get_save_preset_collision_delete_and_hostile_name() {
-        let Some(dir) = layer_folder() else { return };
+        let dir = stage_folder();
         let _ = std::fs::remove_dir_all(&dir);
         let (s, v) = layer("plugin_defaults_get", json!({}));
         assert_eq!(
@@ -2616,6 +2632,13 @@ mod tests {
         assert_eq!(layer("plugin_defaults_reset_role", json!({"role": "snare"})).0, 200);
         let (_, v) = layer("plugin_defaults_get", json!({}));
         assert!(v["roles"].as_object().unwrap().is_empty());
+        // a hostile file: the range check (note 300) gives no value for the role
+        std::fs::write(dir.join("defaults.json"), r#"{"v":1,"roles":{"kick":{"note":300}}}"#).unwrap();
+        let (_, v) = layer("plugin_defaults_get", json!({}));
+        assert!(
+            v["roles"].as_object().unwrap().is_empty(),
+            "the range check drops note 300: {v}"
+        );
         // a bad role and a hostile note
         assert_eq!(
             layer("plugin_defaults_save_role", json!({"role": "bass", "notes": [1]})).0,
@@ -2628,11 +2651,10 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "run by the stage editor-defaults with DS_ARA_USER_DIR unset"]
     fn defaults_layer_answers_without_a_folder_and_never_panics() {
         // no folder (a gate build without the switch): get answers `nofolder`, a save says so
-        if layer_folder().is_some() {
-            return;
-        }
+        assert!(layer_folder().is_none(), "this test needs DS_ARA_USER_DIR unset");
         let (s, v) = layer("plugin_defaults_get", json!({}));
         assert_eq!((s, v["status"].as_str()), (200, Some("nofolder")));
         let (s, _) = layer("plugin_defaults_save_role", json!({"role": "kick", "notes": [36]}));

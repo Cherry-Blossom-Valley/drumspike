@@ -654,9 +654,16 @@ pub fn list_at(dir: &Path) -> Vec<Preset> {
             .unwrap_or_default();
         pr.file = p.file_name().map(|s| s.to_string_lossy().into_owned());
         if !seen.insert(key_of(&pr.name)) {
-            // the same name as an earlier file (or as the built-in preset): both stay visible, the later one with its file name
-            pr.name = format!("{} [{stem}]", pr.name);
-            seen.insert(key_of(&pr.name));
+            // the same name as an earlier file (or as the built-in preset): both stay visible, the later one with its file name; the shown name
+            // itself can collide (a file whose inner name is "Twin [b]"), so a number follows until it is free
+            let base = format!("{} [{stem}]", pr.name);
+            let mut shown = base.clone();
+            let mut k = 2;
+            while !seen.insert(key_of(&shown)) {
+                shown = format!("{base} ({k})");
+                k += 1;
+            }
+            pr.name = shown;
         }
         out.push(pr);
     }
@@ -1154,6 +1161,31 @@ mod tests {
         std::fs::create_dir(p.join("dir.json")).unwrap();
         let names: Vec<String> = list_at(&d).into_iter().map(|x| x.name).collect();
         assert_eq!(names, [BUILTIN, "Good"]);
+    }
+
+    #[test]
+    fn a_shown_name_that_collides_gets_a_number_and_every_file_stays_deletable() {
+        let d = scratch("twin-collide");
+        let p = d.join("Presets");
+        std::fs::create_dir_all(&p).unwrap();
+        for (f, n) in [
+            ("a.json", "Twin"),
+            ("b.json", "Twin"),
+            ("c.json", "Twin [b]"),
+            ("d.json", "Twin [b]"),
+        ] {
+            std::fs::write(p.join(f), format!(r#"{{"v":1,"name":"{n}","roles":{{}}}}"#)).unwrap();
+        }
+        let names: Vec<String> = list_at(&d).into_iter().map(|x| x.name).collect();
+        assert_eq!(names.len(), 5);
+        let unique: HashSet<String> = names.iter().map(|n| key_of(n)).collect();
+        assert_eq!(unique.len(), 5, "{names:?}");
+        // the shown names are made again from the files after each delete: take the last one each time
+        for _ in 0..4 {
+            let last = list_at(&d).pop().unwrap().name;
+            delete_preset_at(&d, &last).unwrap_or_else(|e| panic!("{last}: {e}"));
+        }
+        assert_eq!(list_at(&d).len(), 1);
     }
 
     #[test]

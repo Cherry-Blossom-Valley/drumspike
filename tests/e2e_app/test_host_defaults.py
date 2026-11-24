@@ -19,7 +19,7 @@ PRESETS = [
 
 STUBS = """(presets) => {
   window.__calls = [];
-  B.defaultsGet = async () => ({ status: 'ok', text: '', roles: {}, follow: {}, export: {}, builtin: 'General MIDI', presets });
+  B.defaultsGet = async () => ({ status: 'ok', text: '', roles: {}, builtin: 'General MIDI', presets });
   B.defaultsSaveRole = async (role, notes, params) => { window.__calls.push(['save', role, notes, params]); return {}; };
   B.defaultsResetRole = async role => { window.__calls.push(['reset', role]); return {}; };
   B.presetSave = async (name, roles, overwrite) => { window.__calls.push(['preset', name, roles, !!overwrite]); return { exists: false }; };

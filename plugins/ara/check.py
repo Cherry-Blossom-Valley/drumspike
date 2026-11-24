@@ -8658,7 +8658,7 @@ def stage_defaults_units() -> bool:
     """The unit tests of the rules (kept session values, hostile files, the notes of a role, the stale sets after a note) pass."""
     ok = True
     for name, filt in (
-        ("kept", "held_without"), ("kept-gone", "the_kept_values_of_a_removed_source"), ("restore-late", "a_restore_after_a_first_round"),
+        ("kept", "held_without"), ("kept-gone", "the_kept_values_of_a_removed_source"), ("kept-round", "a_source_with_no_result_that_is_not_in_a_round"), ("kept-used", "a_used_entry_is_removed"), ("export-merge", "an_older_read_of_the_export"), ("twin-names", "a_shown_name_that_collides"), ("restore-late", "a_restore_after_a_first_round"),
         ("userdefaults", "userdefaults"), ("service-defaults", "new_toms"), ("prepare-note", "a_changed_note"),
     ):
         rc, text = unit_with_fault(f"defaults-unit-{name}", filt, {})
@@ -8678,6 +8678,8 @@ def stage_defaults_units_fault() -> bool:
         ("preset-clash", "a_name_whose_file_name", {"DS_ARA_DEFAULTS_FAULT": "preset-overwrite"}),
         ("backup", "a_failed_backup", {"DS_ARA_DEFAULTS_FAULT": "backup-ignore"}),
         ("kept-gone", "the_kept_values_of_a_removed_source", {"DS_ARA_DEFAULTS_FAULT": "keep-gone"}),
+        ("kept-round", "a_source_with_no_result_that_is_not_in_a_round", {"DS_ARA_DEFAULTS_FAULT": "kept-by-round"}),
+        ("kept-stale", "a_used_entry_is_removed", {"DS_ARA_DEFAULTS_FAULT": "kept-stale"}),
     ):
         rc, _text = unit_with_fault(f"defaults-unit-fault-{name}", filt, env)
         ok = pass_fail(f"defaults-unit-fault-{name}", rc != 0, f"the fault {env} made `cargo test {filt}` fail (rc={rc})") and ok
@@ -8692,14 +8694,17 @@ def layer_run(label: str, filt: str, fault: dict | None = None, with_dir: bool =
     if with_dir:
         env["DS_ARA_USER_DIR"] = str(d)
     guard_user_dir(["cargo"], env, label)
-    return run(["cargo", "test", "--locked", "--features", "test-switches", "--lib", filt, "--", "--nocapture"], env=env, log=f"{label}.log", cwd=HERE)
+    return run(["cargo", "test", "--locked", "--features", "test-switches", "--lib", filt, "--", "--ignored", "--nocapture"], env=env, log=f"{label}.log", cwd=HERE)
 
 
 def stage_editor_defaults() -> bool:
     """The commands of the page through the real command layer: get, save a role, a preset, a colliding name (refused, the text reaches the page), delete, a hostile name,
     and the answer without a folder."""
     rc, text = layer_run("editor-defaults", "defaults_layer_get_save")
+    # the tests are #[ignore]d outside this stage and refuse to run without the folder: a run without DS_ARA_USER_DIR must FAIL (a filter that cannot fire)
+    rc_none, _t = layer_run("editor-defaults-nodir", "defaults_layer_get_save", with_dir=False)
     ran = "defaults_layer_get_save_preset_collision_delete_and_hostile_name ... ok" in text
+    ok = pass_fail("editor-defaults-needs-dir", rc_none != 0, f"the same test without DS_ARA_USER_DIR fails, it does not pass early (rc={rc_none})")
     ok = pass_fail("editor-defaults", rc == 0 and ran, f"get, save role, preset save, collision refused, delete, hostile name `../x`: rc={rc}, the test ran and passed: {ran}")
     rc2, text2 = layer_run("editor-defaults-nofolder", "defaults_layer_answers", with_dir=False)
     ran2 = "defaults_layer_answers_without_a_folder_and_never_panics ... ok" in text2
@@ -8708,9 +8713,13 @@ def stage_editor_defaults() -> bool:
 
 def stage_editor_defaults_fault() -> bool:
     ok = True
-    for name, fault in (("all-roles", {"DS_ARA_DEFAULTS_FAULT": "all-roles"}), ("trust", {"DS_ARA_DEFAULTS_FAULT": "trust"}), ("overwrite", {"DS_ARA_DEFAULTS_FAULT": "preset-overwrite"})):
-        rc, _t = layer_run(f"editor-defaults-fault-{name}", "defaults_layer_get_save", fault)
-        ok = pass_fail(f"editor-defaults-fault-{name}", rc != 0, f"the fault {fault} made the command-layer test fail (rc={rc})") and ok
+    for name, fault, why in (
+        ("all-roles", {"DS_ARA_DEFAULTS_FAULT": "all-roles"}, "Save as default writes every role, so the file holds more than the saved role"),
+        ("trust", {"DS_ARA_DEFAULTS_FAULT": "trust"}, "the range check is off, so a note 300 of a hostile file reaches the page"),
+        ("overwrite", {"DS_ARA_DEFAULTS_FAULT": "preset-overwrite"}, "a colliding file name replaces the other preset without a question"),
+    ):
+        rc, text = layer_run(f"editor-defaults-fault-{name}", "defaults_layer_get_save", fault)
+        ok = pass_fail(f"editor-defaults-fault-{name}", rc != 0 and "panicked" in text, f"the fault {fault} ({why}) made the command-layer test fail (rc={rc})") and ok
     return ok
 
 
