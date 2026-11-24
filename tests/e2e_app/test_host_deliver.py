@@ -285,3 +285,68 @@ def test_the_fault_run_leak_makes_the_standalone_check_fail(app):
     finally:
         app.evaluate("() => { DLV.fault = ''; DLV.ready = false; DLV.st = null; document.getElementById('dlvBar')?.remove(); }")
     assert s["bar"] is True, "the fault shows the toolbar handles in the standalone page, so the check can fail"
+
+
+# ---- #592: the handles of a row header fit the header ----
+
+def strip_boxes(page, name):
+    return page.evaluate("""n => {
+      const row = document.querySelector(`#lanesScroll .track[data-name="${n}"]`), th = row.querySelector('.thead'), art = th.querySelector('.tart');
+      const box = e => { const b = e.getBoundingClientRect(); return { l: b.left, r: b.right, t: b.top, b: b.bottom }; };
+      const shown = e => !!e && e.checkVisibility({ visibilityProperty: true });
+      return { head: box(th), art: shown(art) ? box(art) : null, collapsed: th.querySelector('.tdel').classList.contains('collapsed'),
+        hs: [...th.querySelectorAll('.tdel .dlvH')].map(h => ({ kind: h.dataset.kind, box: box(h), badge: h.querySelector('.dlvB').textContent,
+          label: h.querySelector('.dlvL').textContent, icon: shown(h.querySelector('.dlvI svg')), text_shown: shown(h.querySelector('.dlvT')),
+          aria: h.getAttribute('aria-label'), title: h.title })) };
+    }""", name)
+
+
+@pytest.fixture
+def heights(host):
+    yield host
+    host.evaluate("() => { document.documentElement.style.removeProperty('--thead-w'); setTrackHeight('large'); DLV.paint(); }")
+
+
+def assert_fit(s):
+    for h in s["hs"]:
+        b, a = h["box"], s["art"]
+        assert b["l"] >= s["head"]["l"] and b["r"] <= s["head"]["r"] and b["t"] >= s["head"]["t"] and b["b"] <= s["head"]["b"], (h["kind"], b, s["head"])
+        assert b["r"] <= a["l"] or b["l"] >= a["r"] or b["b"] <= a["t"] or b["t"] >= a["b"], f"the handle {h['kind']} lies on the role drawing: {b} {a}"
+    assert all(x["box"]["r"] <= y["box"]["l"] for x, y in zip(s["hs"], s["hs"][1:])), "no handle lies on the next one"
+
+
+@pytest.mark.parametrize("height", ["medium", "large"])
+def test_the_three_handles_fit_the_row_header_and_do_not_lie_on_the_role_drawing(heights, height):
+    host = heights
+    host.evaluate("h => { setTrackHeight(h); DLV.paint(); }", height)
+    give(host, payload())
+    s = strip_boxes(host, FOUR[0][0])
+    assert s["art"] is not None, "the role drawing shows at this height (else the test proves nothing)"
+    assert not s["collapsed"] and [h["kind"] for h in s["hs"]] == ["midi", "spike", "audio"], s
+    assert_fit(s)
+    assert all(h["icon"] and not h["text_shown"] for h in s["hs"]), s
+    assert [h["label"] for h in s["hs"]] == ["MIDI", "Spike", "Audio"]
+    assert [h["badge"] for h in s["hs"]] == ["1", "+", "+"]
+    assert s["hs"][2]["aria"] == "Audio spike, press to prepare" and s["hs"][2]["title"].startswith("Audio spike: press to prepare"), "the whole text is in the label and the tooltip"
+    give(host, payload(gen=2, midi=S_PREP, spike=err("no room"), audio=S_NONE))
+    assert [h["badge"] for h in strip_boxes(host, FOUR[0][0])["hs"]] == ["…", "!", "–"]
+    # a new state arrives with no new paint of the strips (the poll): long counts must still fit, the strip is not built again
+    counts = [{"state": "ready", "n": n, "why": ""} for n in (999, 1234, 123456)]
+    give(host, payload(gen=3, midi=counts[0], spike=counts[1], audio=counts[2]))
+    s = strip_boxes(host, FOUR[0][0])
+    assert not s["collapsed"] and [h["badge"] for h in s["hs"]] == ["999", "1k", "99k"], s
+    assert "ready (1234)" in s["hs"][1]["title"], "the tooltip has the whole count"
+    assert_fit(s)
+    assert host.evaluate("""n => [...document.querySelectorAll(`#lanesScroll .track[data-name="${n}"] .tdel .dlvH`)].every(h =>
+        h.scrollWidth <= h.clientWidth + 1 && [...h.children].every(c => c.scrollWidth <= c.clientWidth + 1))""", FOUR[0][0]), "no text of a tile is cut"
+
+
+def test_a_header_that_is_too_narrow_for_the_three_falls_back_to_the_one_handle_with_the_menu(heights):
+    host = heights
+    host.evaluate("() => { setTrackHeight('medium'); DLV.paint(); }")
+    give(host, payload())
+    assert not strip_boxes(host, FOUR[0][0])["collapsed"], "the three fit the default header (else the test proves nothing)"
+    host.evaluate("() => { document.documentElement.style.setProperty('--thead-w', '180px'); DLV.paint(); }")
+    host.wait_for_function("() => !FR.raf && FR.flags === 0")
+    s = strip_boxes(host, FOUR[0][0])
+    assert s["collapsed"] and [h["kind"] for h in s["hs"]] == ["one"], s

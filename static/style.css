@@ -570,7 +570,23 @@ body.host .track.hostHidden, body.host .track.hostMerged { display: none; }   /*
 #hostIntro { color: var(--accent); }   /* #575: the first-open line of the host mode */
 
 /* #576 (DAW plugin M1c3): the drag handles of the DAW. Host mode only: static/deliver.js makes the elements, nothing makes them with the mode off. */
-.tdel { position: absolute; left: 12px; bottom: 4px; display: flex; gap: 4px; align-items: center; z-index: 2; }
+.tdel { position: absolute; left: 12px; right: 22px; bottom: 4px; display: flex; gap: 3px; align-items: center; z-index: 2; }
+/* #592: the strip ends before the role drawing (it lay on it), and a handle of a row header is a small tile: the icon and a badge (the count,
+   or one sign) over a small label. The state text is in the tooltip; the collapsed form (one handle and the menu) keeps the text. */
+#lanesScroll:not([data-height="small"]) .thead:not(.tart-hidden) .tdel { right: calc(30px + var(--tart-size, 54px)); }
+.dlvB, .dlvI { display: none; }
+.dlvH.dlvTile { display: inline-grid; grid-template-columns: auto auto; grid-template-areas: "i b" "l l"; column-gap: 2px; justify-content: center; align-items: center;
+  flex: 0 0 38px; width: 38px; box-sizing: border-box; padding: 1px 2px; max-width: none; }   /* a fixed width: the fit never depends on a count */
+.dlvTile .dlvI { display: block; grid-area: i; width: 14px; height: 13px; color: var(--text, #d6dbe4); }
+.dlvTile .dlvI svg { display: block; width: 100%; height: 100%; }
+.dlvTile .dlvB { display: block; grid-area: b; font-size: 9px; min-width: 6px; text-align: center; overflow: hidden; }
+.dlvTile .dlvL { grid-area: l; font-size: 9px; line-height: 11px; font-weight: 500; text-align: center; color: var(--dim); }
+.dlvTile .dlvT { display: none; }
+.dlvTile[data-state="ready"] .dlvI, .dlvTile[data-state="ready"] .dlvB { color: var(--accent); }
+.dlvTile[data-state="ready"] .dlvB { font-weight: 600; }
+.dlvTile[data-state="error"] .dlvI, .dlvTile[data-state="error"] .dlvB { color: var(--red, #e5534b); }
+.dlvTile[data-state="off"] { border-style: dashed; }
+.tdel.collapsed .dlvH { flex: 0 1 auto; min-width: 0; }
 .dlvH { display: inline-flex; flex-direction: column; gap: 0; padding: 1px 6px; border: 1px solid var(--line); border-radius: 4px; background: var(--panel2, #1d222b);
   font-size: 10px; line-height: 12px; cursor: grab; user-select: none; color: var(--dim); max-width: 120px; overflow: hidden; white-space: nowrap; }
 .dlvH .dlvL { font-weight: 600; color: var(--text, #d6dbe4); }

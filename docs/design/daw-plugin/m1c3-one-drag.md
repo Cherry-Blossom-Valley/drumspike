@@ -433,3 +433,13 @@ One commit per line or pair, risky parts first. This note is commit 1 (Gate line
   cannot be interrupted, so one single long write ends first. Unit test `a_stop_during_a_long_job_ends_the_worker_within_the_unload_wait`.
 - P5: `MEM_CAP_BYTES` is used in `write_audio_row` (test `the_size_is_estimated_before_anything_is_written...`); `no_folder` is used in `state_for`, which
   `state_json` calls (test `with_no_export_folder_the_state_the_page_gets_says_so...`); `deliver-delivered-keeps` fails when the file is missing.
+
+## Change of #592: the handles of a row header are tiles
+
+Found in a DAW: three handles with a label line and a state line were wider than the row header (230 px). The third was cut and the handles lay on the role drawing.
+
+- A handle of a row header is a small tile: an icon and a badge over a small label (MIDI, Spike, Audio). Picture: `m1c5-handles.png`.
+- The badge is the count when ready, `…` preparing, `+` press to prepare, `!` error, `–` no hits. The whole state text is in the tooltip and in the screen reader label.
+- A tile has a fixed width, so the fit never depends on a count. From 1000 hits the badge counts in thousands (`1k`, `12k`); the tooltip has the number.
+- The strip ends before the role drawing. A header that is too narrow for the three tiles gets the one handle with the menu. All strips are measured in one pass.
+- The toolbar handles and the menu are unchanged.
