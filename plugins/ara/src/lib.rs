@@ -6660,6 +6660,7 @@ mod tests {
     fn a_retry_while_the_old_job_is_alive_is_refused() {
         let (doc, _a, b) = first_open_doc();
         set_fail(&b, firstopen::Fail::Round);
+        doc.auto_retry.store(0, Ordering::SeqCst); // the worker has given up: the row is failed
         b.life.in_round.store(true, Ordering::SeqCst); // the old round is in fact still running
         let r = doc.retry_rows(&["q8".to_string()]);
         assert_eq!(r["started"], json!([]), "{r}");
