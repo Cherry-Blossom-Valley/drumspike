@@ -7113,7 +7113,7 @@ def fo_limit(label: str, env: dict | None = None) -> dict:
     return firstopen_run(label, "limit", {"DS_ARA_FIRSTOPEN_MS": "read=2500", **(env or {})}, ["--slow-read", "1:9000"])
 
 
-def limit_parts(run: dict) -> dict:
+def fo_limit_parts(run: dict) -> dict:
     bad = fo_unusable(run, ("editor-firstopen-limit",))
     if bad:
         return bad
@@ -7335,7 +7335,7 @@ def stage_editor_firstopen() -> bool:
     ok = print_parts("", flow_parts(fo_flow("editor-firstopen-flow")))
     ok = print_parts("", offline_parts(fo_offline("editor-firstopen-offline"))) and ok
     ok = print_parts("", failed_parts(fo_failed("editor-firstopen-failed"))) and ok
-    ok = print_parts("", limit_parts(fo_limit("editor-firstopen-limit"))) and ok
+    ok = print_parts("", fo_limit_parts(fo_limit("editor-firstopen-limit"))) and ok
     return print_parts("", stale_parts(fo_stale("editor-firstopen-stale"))) and ok
 
 
@@ -7358,7 +7358,7 @@ def stage_editor_firstopen_fault() -> bool:
                       "editor-firstopen-retry-one", "Retry runs for every track", "other tracks touched") and ok
     ok = fault_reason("editor-firstopen-fault-handle-early", stale_parts(fo_stale("editor-firstopen-fault-handle-early", {"DS_ARA_FIRSTOPEN_FAULT": "handle-early"})),
                       "editor-firstopen-handles", "a drag handle is ready before its row is done", "ready handle before done") and ok
-    ok = fault_reason("editor-firstopen-fault-no-limit-read", limit_parts(fo_limit("editor-firstopen-fault-no-limit-read", {"DS_ARA_FIRSTOPEN_FAULT": "no-limit"})),
+    ok = fault_reason("editor-firstopen-fault-no-limit-read", fo_limit_parts(fo_limit("editor-firstopen-fault-no-limit-read", {"DS_ARA_FIRSTOPEN_FAULT": "no-limit"})),
                       "editor-firstopen-limit", "no time limit fires", "still reading after the limit") and ok
     parts = flow_parts({"rc": 2, "rows": [], "rep": None})
     return pass_fail("editor-firstopen-fault-norun", all((not g) and "no usable run" in ev for g, ev in parts.values()), "a run with no page report fails with 'no usable run'") and ok
