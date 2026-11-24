@@ -197,6 +197,9 @@ pub fn page_dir() -> Option<(PathBuf, &'static str)> {
 
 // ---------------------------------------------------------------- what an editor needs
 
+/// M1d4: Retry for the named rows of the states of the first open; answers `{ok, started, refused}`.
+pub type RetryFn = Arc<dyn Fn(&[String]) -> Value + Send + Sync>;
+
 /// Reads the events of the document's tracks after a command of the page (see `Backend::record`).
 pub type RecordFn = Arc<dyn Fn(&drumspike_app::Service, &str) -> Result<bool, String> + Send + Sync>;
 
@@ -236,6 +239,10 @@ pub struct Backend {
     pub selection: Arc<dyn Fn() -> Value + Send + Sync>,
     /// M1b8: the rows of the page in song time (the answer of `plugin_host_regions`).
     pub rows: Arc<dyn Fn() -> Value + Send + Sync>,
+    /// M1d4: the states of the first open (the answer of `plugin_host_states`).
+    pub states: Arc<dyn Fn() -> Value + Send + Sync>,
+    /// M1d4: Retry for the named rows (the answer of `plugin_host_retry`).
+    pub retry: RetryFn,
     /// M1c2: the file of the document that lists the folders the user chose in the sheet (`deliver::FOLDERS_FILE` in the
     /// folder of the document); `None` for an editor with no document.
     pub export_folders: Arc<dyn Fn() -> Option<PathBuf> + Send + Sync>,
@@ -678,7 +685,7 @@ fn poll_channel(sh: &Arc<Shared>, id: &str, total: std::time::Duration) -> Vec<V
 
 /// The commands that `call::run` leaves to the desktop shell (`SHELL_ONLY` of
 /// `crates/app/src/call.rs`), plus the one command of the drag plugin. Each has an answer.
-const SHELL_COMMANDS: [&str; 45] = [
+const SHELL_COMMANDS: [&str; 47] = [
     "plugin_report",
     "plugin_defaults_get",
     "plugin_defaults_save_role",
@@ -689,6 +696,8 @@ const SHELL_COMMANDS: [&str; 45] = [
     "plugin_host_tempo",
     "plugin_host_selection",
     "plugin_host_regions",
+    "plugin_host_states",
+    "plugin_host_retry",
     "plugin_deliver_state",
     "plugin_deliver_take",
     "plugin_deliver_want",
@@ -1067,6 +1076,20 @@ fn shell_command(sh: &Arc<Shared>, cmd: &str, args: &Value) -> Option<Answer> {
         "plugin_host_selection" => Answer::json(200, &(sh.backend.selection)()),
         // M1b8: the rows of the page in song time (one per DAW track, its clips at their song positions)
         "plugin_host_regions" => Answer::json(200, &(sh.backend.rows)()),
+        // M1d4: the states of the first open (one per DAW track row, one for the document) and Retry for failed rows
+        "plugin_host_states" => Answer::json(200, &(sh.backend.states)()),
+        "plugin_host_retry" => {
+            let ids: Vec<String> = args
+                .get("rows")
+                .and_then(Value::as_array)
+                .map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect())
+                .unwrap_or_default();
+            if ids.is_empty() || ids.len() > 256 {
+                Answer::err(400, "rows must list 1 to 256 row ids")
+            } else {
+                Answer::json(200, &(sh.backend.retry)(&ids))
+            }
+        }
         // M1c3: the handles of the page (the state of the prepared files, the files of a drag, the first use of a wav kind)
         "plugin_deliver_state" => {
             sh.backend.prep.ensure_started();
@@ -2229,6 +2252,8 @@ fn backend_of(plugin: &Plugin) -> Backend {
                 export_regions: Arc::new(crate::deliver::ExportRegions::default),
                 selection: Arc::new(|| Value::Null),
                 rows: Arc::new(|| Value::Null),
+                states: Arc::new(|| crate::firstopen::States::default().to_json(0, "unbound")),
+                retry: Arc::new(|_| json!({"ok": false, "started": [], "refused": []})),
                 export_folders: Arc::new(|| None),
             }
         }
@@ -2448,6 +2473,8 @@ mod tests {
                     "plugin_host_offer",
                     "plugin_host_selection",
                     "plugin_host_regions",
+                    "plugin_host_states",
+                    "plugin_host_retry",
                     "plugin_deliver_state",
                     "plugin_deliver_take",
                     "plugin_deliver_want",

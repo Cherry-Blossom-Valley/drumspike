@@ -276,3 +276,19 @@ reached). The standalone stage `standalone-diff` is expected to pass on this tic
   README. Each fault run asserts its reason text. A stage that runs ignored tests fails when 0 tests ran.
 - R12 A panic or a poisoned lock in the state path never blanks the page: the command answers with the last good list, or an error that
   the page shows as one line.
+
+## 12. As built (differences from sections 1 to 9)
+
+- The state list is built from every live source: the row id is `q<region sequence id>` of the first region (else `s<creation index>`), the name is the display name rule of
+  `names.rs` with the sources that have no track included. A source on two sequences is shown in the row of its first region.
+- Retry analyses only the asked tracks: `DocService::only_sources` limits the round (the service rounds analysed every track before). The fault run `retry-all-tracks` ignores it.
+- The automatic tries of the worker show as analysing for a time that is computed from the next due time plus 3 s (the entries of the worker are cleared by any change of the
+  document, for example the poll of the page that reads a finished job, so the shown time ends by itself and never stands for ever).
+- The page asks `plugin_host_states` every second while a row is not done and draws what it gets; the plugin pushes the same answer as the event `plugin-states`.
+- Cards (rows with no project track yet) are not hidden by the DAW selection follow: they have no track key to map. A strip in a header follows its row.
+- A done row with hits has no strip (R5); a done row with no hits has one with the hint. The line of a finished document goes quiet after 8 s.
+- The handles: `Prep` takes a gate from the document; a row that is not done is `preparing` (in progress) or `none` (failed or offline) and `plugin_deliver_take` refuses it.
+- Limits that no stage runs: the analysis limit (`max(10 min, 3 x audio)`) is covered by unit tests only, because 3 x the audio length of the fixtures is 9 s and the stage
+  would need a longer wait than the gate allows. The read limit and the wait limit have stage runs (`editor-firstopen-limit`, `editor-firstopen-offline`).
+- Stages: `editor-firstopen` (flow, offline with a late arrival, failed with Retry of one track, a limit run, stale hits kept) and `editor-firstopen-fault` (one fault run for each
+  reason).

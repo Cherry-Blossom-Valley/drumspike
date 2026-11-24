@@ -614,7 +614,12 @@ pub struct Prep {
     ended: Arc<std::sync::atomic::AtomicBool>,
     /// A command that writes the project ran and no `done` of a job was seen since (see [`Prep::command_done`]).
     job_open: std::sync::atomic::AtomicBool,
+    /// M1d4 (#578): the rows that are not done (a handle of such a row is never ready) and the rows that are only in progress.
+    gate: Mutex<Option<GateFn>>,
 }
+
+/// M1d4: the ids of the DAW track rows that are not done: `(id, in_progress)`. A failed or offline row is not in progress.
+pub type GateFn = Arc<dyn Fn() -> Vec<(String, bool)> + Send + Sync>;
 
 struct Gathered {
     rows: Vec<RowIn>,
@@ -642,7 +647,22 @@ impl Prep {
             cv: Condvar::new(),
             ended: Arc::new(std::sync::atomic::AtomicBool::new(false)),
             job_open: std::sync::atomic::AtomicBool::new(false),
+            gate: Mutex::new(None),
         })
+    }
+
+    /// M1d4: the plugin tells which rows are not done (the states of the first open).
+    pub fn set_gate(&self, g: GateFn) {
+        *self.gate.lock().unwrap_or_else(|e| e.into_inner()) = Some(g);
+    }
+
+    /// The rows that are not done, `(id, in_progress)`; none under the fault run `handle-early`.
+    fn blocked(&self) -> Vec<(String, bool)> {
+        if crate::test_switch("DS_ARA_FIRSTOPEN_FAULT").as_deref() == Ok("handle-early") {
+            return Vec::new();
+        }
+        let g = self.gate.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        g.map(|f| f()).unwrap_or_default()
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, St> {
@@ -924,6 +944,7 @@ impl Prep {
     #[must_use]
     pub fn state_json(&self) -> Value {
         let rows = self.rows_now();
+        let blocked = self.blocked();
         let st = self.lock();
         let dirty = st.wake_seq != st.clean_seq;
         let row_has = |id: &str| st.cycles == 0 || dirty || st.want.contains_key(&(id.to_string(), Kind::Midi));
@@ -933,11 +954,23 @@ impl Prep {
             .map(|r| {
                 let has = row_has(&r.id);
                 let k = |kind: Kind| self.state_for(&st, &(r.id.clone(), kind), has).to_json();
+                // M1d4: a row that is not done has no ready handle (in progress: preparing; failed or offline: none)
+                if let Some((_, busy)) = blocked.iter().find(|(id, _)| *id == r.id) {
+                    let s = if *busy {
+                        json!({"state": "preparing", "n": 0, "why": ""})
+                    } else {
+                        json!({"state": "none", "n": 0, "why": "no hits"})
+                    };
+                    return json!({"id": r.id, "name": r.name, "srcs": r.srcs, "midi": s, "spike": s, "audio": s});
+                }
                 json!({"id": r.id, "name": r.name, "srcs": r.srcs, "midi": k(Kind::Midi), "spike": k(Kind::Spike), "audio": k(Kind::Audio)})
             })
             .collect();
         let any = rows.rows.iter().any(|r| row_has(&r.id));
-        let merged = self.state_for(&st, &(String::new(), Kind::Merged), any).to_json();
+        let mut merged = self.state_for(&st, &(String::new(), Kind::Merged), any).to_json();
+        if blocked.iter().any(|(_, busy)| *busy) {
+            merged = json!({"state": "preparing", "n": 0, "why": ""});
+        }
         json!({"gen": st.gen, "rows": items, "merged": merged, "counters": {"cycles": st.cycles, "jobs": st.jobs},
                "used": {"spike": st.used[0], "audio": st.used[1]},
                "hint": "Drop at the start of the session"})
@@ -978,6 +1011,13 @@ impl Prep {
             return Err((409, "error: no export folder".into()));
         };
         let fps = self.fps(&g);
+        // M1d4: a row that is not done is never taken (its handle is not ready)
+        let blocked = self.blocked();
+        if items.iter().any(|(id, _)| {
+            blocked.iter().any(|(b, _)| b == id) || (id.is_empty() && blocked.iter().any(|(_, busy)| *busy))
+        }) {
+            return Err((409, "preparing: a track is not ready yet".into()));
+        }
         let mut picks: Vec<PathBuf> = Vec::new();
         {
             let mut st = self.lock();
