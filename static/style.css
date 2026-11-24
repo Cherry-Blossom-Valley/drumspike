@@ -592,3 +592,13 @@ body.host .track.hostHidden, body.host .track.hostMerged { display: none; }   /*
 .dlvItem:hover { background: var(--panel2, #1d222b); }
 .dlvItem[data-state="preparing"], .dlvItem[data-state="none"] { opacity: 0.6; cursor: default; }
 .dlvItem[data-state="off"], .dlvItem[data-state="error"] { cursor: pointer; }
+/* #578: the states of the first open (host mode only; the elements are made by static/hoststate.js, so the standalone page has none) */
+body.host .hstLine { display: flex; align-items: center; gap: 10px; padding: 4px 12px; font-size: 12px; color: var(--fg, #c8ccd2); background: rgba(54, 197, 160, .10); border-bottom: 1px solid rgba(54, 197, 160, .35); }
+body.host .hstLine[data-state="attention"], body.host .hstLine[data-state="error"] { background: rgba(224, 96, 80, .14); border-bottom-color: rgba(224, 96, 80, .5); }
+body.host .hstLine.hstQuiet { display: none; }
+body.host .hostState { font-size: 11px; line-height: 1.35; padding: 2px 6px; margin-top: 3px; border-left: 3px solid #36c5a0; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+body.host .hostState[data-state="failed"], body.host .hostState[data-state="offline"] { border-left-color: #e06050; }
+body.host .hstCards { padding: 8px 12px; display: flex; flex-direction: column; gap: 6px; }
+body.host .hostCard { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 10px 12px; font-size: 13px; line-height: 1.4; border: 1px solid rgba(255, 255, 255, .14); border-left: 4px solid #36c5a0; border-radius: 4px; }
+body.host .hostCard[data-state="failed"], body.host .hostCard[data-state="offline"] { border-left-color: #e06050; }
+body.host .hstRetry, body.host .hstRetryAll { flex: 0 0 auto; }

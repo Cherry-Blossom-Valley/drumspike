@@ -336,6 +336,8 @@ function shellMethods(invoke, T) {
     deliverState: () => (bridge() ? Promise.resolve(null) : invoke("plugin_deliver_state", {})),
     deliverTake: items => invoke("plugin_deliver_take", { items }),
     deliverWant: (kind, row) => invoke("plugin_deliver_want", row ? { kind, row } : { kind }),
+    hostStates: () => invoke("plugin_host_states"),   // #578: the states of the first open (the plugin only)
+    hostRetry: rows => invoke("plugin_host_retry", { rows }),
     /* #577: the user defaults and presets of the plugin (the plugin owns the files; the test bridge and the standalone app have none: defaultsGet answers none). */
     defaultsGet: () => (bridge() ? Promise.resolve(null) : invoke("plugin_defaults_get", {})),
     defaultsSaveRole: (role, notes, params) => invoke("plugin_defaults_save_role", { role, notes, params }),
