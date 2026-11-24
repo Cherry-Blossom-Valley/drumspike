@@ -251,3 +251,28 @@ reached). The standalone stage `standalone-diff` is expected to pass on this tic
 5. Press Retry twice fast. Expect: one job.
 6. Select a track in the DAW. Expect: the card or strip of that track has the selection mark; hidden tracks hide their cards.
 7. Look for the words relink, source, round, a path, or a host name in any text of the page. Expect: none.
+
+## 11. Rulings of the coordinator (2026-11-24), part of the design
+
+- R1 A separate state list from the plugin (`firstopen.rs`, `plugin_host_states`, event `plugin-states`). No provisional track.
+- R2 Two states stay. offline = the DAW gives no audio: the text says what to do in the DAW, with Retry. failed = an error of read or
+  analysis: reason and Retry.
+- R3 During the automatic tries of the worker the row says analysing. failed only when the worker gives up. No try counter in the text.
+- R4 No fixed cap while progress is visible. reading: failed after 120 s WITHOUT progress only (no fixed 10 min). analysing: a progress
+  fact of the worker if there is one (no progress for 120 s is failed); if there is none, the limit is max(10 min, 3 x the audio length
+  of the track). waiting: 30 s to offline. A late arrival brings the real state back (tested). A limit never cancels or kills work; it
+  changes only the shown state and allows Retry. A Retry while the old job is still alive starts no second job for that track (tested).
+- R5 A strip only on rows that are not done or have 0 hits, plus the document line. A done row with 0 hits says: "no hits found: check
+  the role and the threshold".
+- R6 The no-clip text stays. The first-open line of #575 and the help get: "the page shows the tracks that have the plugin; select one in
+  your DAW". No host name in any text.
+- R7 `static/hoststate.js` with guarded calls only, in `tests/jscov.py` as `hostdefaults.js` is.
+- R8 After a Retry of a read the row says "asking the DAW for the audio" and goes to offline after the 30 s wait limit with the DAW text.
+- R9 A failed or offline row that still has hits from an earlier round keeps them visible; the strip says the hits are from before the
+  failure; no ready drag handle. The edits of the user on that row are never dropped by a failure or by Retry (tested).
+- R10 Report rows carry no path and no audio file name beyond what existing rows carry; DAW track names only under the existing report
+  switch (the privacy class of #562).
+- R11 `DS_ARA_FIRSTOPEN_MS` and the fault switch go through `test_switch` (inert in a delivery build) and into `switches.json` and the
+  README. Each fault run asserts its reason text. A stage that runs ignored tests fails when 0 tests ran.
+- R12 A panic or a poisoned lock in the state path never blanks the page: the command answers with the last good list, or an error that
+  the page shows as one line.
