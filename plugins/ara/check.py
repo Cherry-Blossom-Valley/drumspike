@@ -68,6 +68,9 @@ Stages (`all` runs every one; each prints ok/FAIL with its evidence):
   doc-readd      a restored track is online after its audio is read, with its stored hits and settings, and
                  a track whose audio content differs is analysed again (F6, #582) (fault: the record of a
                  restored track is not pointed at the new cache file)
+  doc-readd-failed-read  a restored track whose first read fails is repaired by the next good read; doc-readd-removed
+                 a restored track that is removed and comes back in one document: the same tracks, once each, all
+                 online (F6b, #586) (faults: a failed read gives up the repair; the removed track stays in the project)
   doc-retry      a round that fails once, then a new request: one track per source, the
                  reference result (fault: a second track for every retried source)
   doc-rerequest  a request for sources that are complete starts no round (fault: a full
@@ -2254,11 +2257,11 @@ def readd_disk(cache: str) -> dict:
     return out
 
 
-def readd_run(label: str, archive: Path, files: list, env: dict | None = None, by_name: bool = False) -> dict:
+def readd_run(label: str, archive: Path, files: list, env: dict | None = None, by_name: bool = False, host_args: list | None = None) -> dict:
     """One restore in a NEW process with a fresh cache, the host reads the audio of every source it was given
     (the DAW sequence of F6: the cache folder has no file of the source when the document is restored)."""
     rc, _text, lines = host_run(
-        label, CLAP, ["restore", "--files", *fixture_args(files), "--archive", str(archive), "--enable-access", *(["--no-persistent-id"] if by_name else [])],
+        label, CLAP, ["restore", "--files", *fixture_args(files), "--archive", str(archive), "--enable-access", *(["--no-persistent-id"] if by_name else []), *(host_args or [])],
         f"cache-{label}", extra=env,
     )
     restored = event_rows(label, "doc_restored")
@@ -2271,6 +2274,9 @@ def readd_run(label: str, archive: Path, files: list, env: dict | None = None, b
         "tracks": restored[0].get("project_tracks") if restored else None,
         "repairs": rows,
         "rounds": len(event_rows(label, "round_start")),
+        "reads": [r.get("read_ok") for r in event_rows(label, "read")],
+        "order": [r.get("event") + (":" + str(r.get("read_ok")) if r.get("event") == "read" else "") for r in report_rows(label) if r.get("event") in ("read", "track_repair", "track_repair_failed")],
+        "failed_rows": event_rows(label, "track_repair_failed"),
         "jobs": job_rows(label),
         "differs": [r for r in event_rows(label, "restore_audio") if r.get("same") is False],
         "disk": disk,
@@ -2442,6 +2448,104 @@ def stage_doc_readd_unknown_fault() -> bool:
         f"the fault switch took an unknown content as the same audio: the restore ran healthy ({f['healthy']}), put the old hits "
         f"on other audio with {len(f['repairs'])} repair row(s) and {len(f['jobs'])} round(s), and the check refused it ({refused})",
     )
+
+
+def stage_doc_readd_failed_read(fault: str | None = None) -> bool:
+    """F6b (#586): the first read of a restored track FAILS (the host's reader answers no for the first time); the track
+    stays as the restore left it (offline on disk) until the host reads again (it turns the samples access off and on).
+    The next good read repairs it: the record is pointed at the new file, the stored hits stay, no round runs, and the
+    repair row comes after the failed read and after the good read. Fault run (`fail-clears-mark`): the failed read
+    gives up the repair, so the good read repairs nothing."""
+    label = "doc-readd-failed-read" + ("-fault" if fault else "")
+    if not HOST.exists() or not CLAP.exists():
+        return pass_fail(label, False, "no host or no CLAP: run check.sh build first")
+    ok_store, archive, why = archive_store()
+    if not ok_store:
+        return pass_fail(label, False, why)
+    blob = json.loads(archive.read_text())
+    track = blob["sources"][READD_SOURCE]["track"]
+    events = blob["events"]
+    env = {"DS_ARA_RESTORE_FAULT": fault} if fault else None
+    f = readd_run(label, archive, [FILES[READD_SOURCE]], env, by_name=True, host_args=["--fail-reads", "0:1", "--reread", "0"])
+    same, ev = readd_same(f, [track], events)
+    order = f["order"]
+    read_ok = f["reads"] == [False, True]
+    after = order == ["read:False", "read:True", "track_repair"]
+    parts = {
+        "reads": (read_ok, f"the reads of the source: {f['reads']} (want one that failed, then one that worked)"),
+        "repair-after-good-read": (after, f"the order of the rows: {order} (want the failed read, the good read, then the repair)"),
+        "repaired": (same, ev),
+        "no-failure-row": (not f["failed_rows"], f"{len(f['failed_rows'])} track_repair_failed row(s)"),
+    }
+    ok = True
+    for name, (good, evidence) in parts.items():
+        ok = bool(good) and ok
+        print(f"    {'ok  ' if good else ('refused' if fault else 'FAIL')} {label}:{name}: {evidence}")
+    if fault:
+        # refused on the repair alone: both reads happened, the restore ran healthy, nothing was repaired, the record stays without identity
+        refused = not same and not after
+        return pass_fail(
+            label,
+            f["healthy"] and read_ok and refused and not f["repairs"] and not f["online"] and f["rounds"] == 0,
+            f"the failed read gave up the repair: the restore ran healthy ({f['healthy']}), the reads were {f['reads']}, "
+            f"{len(f['repairs'])} repair row(s), project document online on disk {f['online']}, and the check refused it ({refused})",
+        )
+    return pass_fail(label, ok, f"{len(parts)} parts")
+
+
+def stage_doc_readd_failed_read_fault() -> bool:
+    return stage_doc_readd_failed_read("fail-clears-mark")
+
+
+def stage_doc_readd_removed(fault: str | None = None) -> bool:
+    """F6b (#586): a restored track is removed (its source is destroyed before its audio is read) and brought back (the
+    same file is added again) in ONE document. The project holds the same tracks as the archive, once each, every one
+    online on disk, with no repair failure and no failed round. Fault run (`keep-removed`): the removed track stays in
+    the project, so the track that comes back gets a second record."""
+    label = "doc-readd-removed" + ("-fault" if fault else "")
+    if not HOST.exists() or not CLAP.exists():
+        return pass_fail(label, False, "no host or no CLAP: run check.sh build first")
+    ok_store, archive, why = archive_store()
+    if not ok_store:
+        return pass_fail(label, False, why)
+    blob = json.loads(archive.read_text())
+    names = sorted(s["track"] for s in blob["sources"])
+    track = blob["sources"][READD_SOURCE]["track"]
+    env = {"DS_ARA_RESTORE_FAULT": fault} if fault else None
+    rc, _text, _lines = host_run(
+        label, CLAP, ["restore-readd", "--files", *fixture_args(FILES), "--archive", str(archive), "--readd", str(READD_SOURCE)],
+        f"cache-{label}", extra=env,
+    )
+    disk = readd_disk(f"cache-{label}")
+    docs = project_docs(f"cache-{label}")
+    held = sorted(tracks_of_doc(docs[0])) if len(docs) == 1 else []
+    online = bool(disk) and all(sz is not None and sz == real and h for sz, real, h in disk.values())
+    destroyed = [r for r in event_rows(label, "source_destroyed")]
+    failed = event_rows(label, "track_repair_failed") + event_rows(label, "job_failed")
+    jobs = job_rows(label)
+    parts = {
+        "run": (rc == 0 and len(destroyed) == 1 and len(docs) == 1, f"rc {rc}, {len(destroyed)} source_destroyed row(s), {len(docs)} project document(s)"),
+        "tracks": (held == names, f"the project holds {held} (want the archive's {names}, once each)"),
+        "online": (online, f"every track online on disk: {online} {sorted(disk.items())[:1]}"),
+        "no-failure": (not failed, f"{len(failed)} failure row(s) {[r.get('error') for r in failed][:1]}"),
+        "analysed": (any(track in (j.get("analysed") or []) for j in jobs), f"the track that came back was analysed by a round: {[j.get('analysed') for j in jobs]}"),
+    }
+    ok = True
+    for name, (good, evidence) in parts.items():
+        ok = bool(good) and ok
+        print(f"    {'ok  ' if good else ('refused' if fault else 'FAIL')} {label}:{name}: {evidence}")
+    if fault:
+        refused = not parts["tracks"][0] or not parts["online"][0]
+        return pass_fail(
+            label,
+            rc == 0 and len(docs) == 1 and refused,
+            f"the removed track stayed in the project: the run was healthy (rc {rc}, {len(docs)} project document) and the check refused the project ({refused}): {parts['tracks'][1]}; {parts['online'][1]}",
+        )
+    return pass_fail(label, ok, f"{len(parts)} parts")
+
+
+def stage_doc_readd_removed_fault() -> bool:
+    return stage_doc_readd_removed("keep-removed")
 
 
 def stage_doc_store_window() -> bool:
@@ -9343,6 +9447,10 @@ STAGES = {
     "doc-readd": stage_doc_readd,
     "doc-readd-fault": stage_doc_readd_fault,
     "doc-readd-unknown-fault": stage_doc_readd_unknown_fault,
+    "doc-readd-failed-read": stage_doc_readd_failed_read,
+    "doc-readd-failed-read-fault": stage_doc_readd_failed_read_fault,
+    "doc-readd-removed": stage_doc_readd_removed,
+    "doc-readd-removed-fault": stage_doc_readd_removed_fault,
     "doc-retry": stage_doc_retry,
     "doc-retry-fault": stage_doc_retry_fault,
     "doc-rerequest": stage_doc_rerequest,
@@ -9514,7 +9622,7 @@ ORDER = [
     "archive-paths-fault", "archive-restore-pathname",
     "threads", "doc-service", "doc-service-fault", "doc-tracks", "doc-tracks-fault", "doc-rounds", "doc-rounds-fault", "doc-two", "doc-two-fault",
     "doc-archive", "doc-archive-fault", "doc-archive-export", "doc-archive-export-fault", "doc-archive-export-store", "doc-archive-export-store-fault", "editor-defaults", "editor-defaults-fault", "defaults-units", "defaults-units-fault", "defaults-new-track", "defaults-new-track-fault", "defaults-hostile", "defaults-hostile-fault", "defaults-real-path", "defaults-real-path-fault", "defaults-writers", "defaults-writers-fault", "defaults-standalone-control", "doc-destroy", "doc-destroy-fault", "doc-close", "doc-close-fault", "doc-home", "doc-home-fault",
-    "doc-id-hostile", "doc-id-hostile-fault", "doc-same-id", "doc-same-id-fault", "doc-restore-busy", "doc-restore-busy-fault", "doc-store-window", "doc-store-window-fault", "doc-store-early-fault", "doc-restore-repair", "doc-restore-repair-fault", "doc-readd", "doc-readd-fault", "doc-readd-unknown-fault",
+    "doc-id-hostile", "doc-id-hostile-fault", "doc-same-id", "doc-same-id-fault", "doc-restore-busy", "doc-restore-busy-fault", "doc-store-window", "doc-store-window-fault", "doc-store-early-fault", "doc-restore-repair", "doc-restore-repair-fault", "doc-readd", "doc-readd-fault", "doc-readd-unknown-fault", "doc-readd-failed-read", "doc-readd-failed-read-fault", "doc-readd-removed", "doc-readd-removed-fault",
     "doc-retry", "doc-retry-fault", "doc-rerequest", "doc-rerequest-fault", "doc-errors", "doc-errors-fault",
     "doc-regions-change", "doc-regions-change-fault", "doc-panic", "doc-panic-fault",
     "doc-source-names", "doc-source-names-fault", "doc-region-move", "doc-region-move-fault", "doc-late-audio", "doc-late-audio-fault", "doc-late-audio-arrives", "doc-late-audio-arrives-fault",
