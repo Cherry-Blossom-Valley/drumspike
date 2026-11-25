@@ -82,6 +82,7 @@
     if (T.mode === "geometry") geometryRun().catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
     if (T.mode === "hostkeys") hostkeysRun().catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
     if (T.mode === "exportdialog") exportDialogRun(names).catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
+    if (T.mode === "exportrows") exportRowsRun().catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
     if (T.mode === "delivery") deliveryRun(names).catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
     if (T.mode === "deliver") deliverRun().catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
     if (T.mode === "firstopen") firstopenRun().catch(function (e) { post({ kind: "js_error", message: String(e && e.message || e), stack: String(e && e.stack) }); });
@@ -857,6 +858,131 @@
     }
     await close();
     post(Object.assign({ kind: "exportdialog" }, out));
+  }
+  /* Mode exportrows (M1c4, #589): the REAL Export dialog in the REAL page makes ONE file per DAW track and kind. The host has a DAW track with clips of three audio files
+     and one with one file (the arguments of the stage deliver). Steps: open (the tiles), Export into Exports/ (the files are compared with the files that a take of the
+     handles gives), the merged MIDI (single mode), the scope "Selected track" (the single mode is off, with its reason), Choose a folder and Export there, an edit
+     followed AT ONCE by Export (the dialog waits for the new set: the new hit is in the file, never the old file), the forged calls. T.arg names the run: "" (all of it),
+     "stuck" (a job that never ends: the dialog says which DAW track is not ready, nothing is written; the folder is that of DS_ARA_PICK_DIR). */
+  async function exportRowsRun() {
+    var out = { steps: [] }, targ = String(T.arg || "").split(";"), OTHER = targ[0], PICK = targ[1] || "";
+    function q(sel) { return document.querySelector(sel); }
+    function txt(sel) { var e = q(sel); return e ? String(e.textContent || "") : null; }
+    function sleepE(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+    function mouse(el, type) { var r = el.getBoundingClientRect(); el.dispatchEvent(new MouseEvent(type, { bubbles: true, cancelable: true, button: 0, clientX: r.left + r.width / 2, clientY: r.top + r.height / 2, detail: 1 })); }
+    async function until(fn, ms) { var t0 = performance.now(); for (;;) { var v = false; try { v = await fn(); } catch (e) { /* not yet */ } if (v) return Math.round(performance.now() - t0); if (performance.now() - t0 > ms) return -1; await sleepE(80); } }
+    function inv(c, a) { return window.__TAURI__.core.invoke(c, a || {}).then(function (v) { return { ok: true, v: v }; }, function (e) { return { ok: false, code: e && (e.code || e.status), msg: String(e && (e.message || e)) }; }); }
+    function tile(id) { var t = q(id); return t ? { state: t.dataset.state, text: String(t.querySelector(".exDragN").textContent || "") } : null; }
+    function snap(label) {
+      var r = { label: label, dest: q("#exDest") ? q("#exDest").value : null, problem: txt("#exProblem"), replace: txt("#exReplace"), go_disabled: q("#exGo").disabled,
+        all_text: txt("#exAllText"), sel_text: txt("#exSelText"), skipped: txt("#exSkipped"), single_label: q("#exModeSingle").closest("label").textContent.trim(),
+        single_title: q("#exModeSingle").closest("label").title, single_disabled: q("#exModeSingle").disabled, single_checked: q("#exModeSingle").checked,
+        result: q("#exResult").classList.contains("hidden") ? null : txt("#exResultText"), msg: txt("#stMsg"), midi: tile("#exDragMidi"), spikes: tile("#exDragSpikes"), body: document.body.innerText.toLowerCase().indexOf("source") >= 0 };
+      out.steps.push(r); return r;
+    }
+    var btn = document.getElementById("hostMenuBtn"), panel = document.getElementById("hostMenu");
+    async function openFromMenu() {
+      mouse(btn, "mousedown"); mouse(btn, "mouseup"); btn.click();
+      if ((await until(function () { return DSHostMenu.isOpen(); }, 3000)) < 0) return "the click did not open the menu";
+      var g = panel.querySelector('[data-group="File"]'); if (!g) return "no File group";
+      g.click(); await sleepE(100);
+      var it = panel.querySelector('[data-cmd="export"]'); if (!it) return "no item export";
+      mouse(it, "mousedown"); mouse(it, "mouseup"); it.click();
+      if ((await until(function () { return !q("#exportModal").classList.contains("hidden"); }, 10000)) < 0) return "the dialog did not open";
+      return "ok";
+    }
+    async function answerNotice() {
+      var go = await until(function () { return !q("#confirmModal").classList.contains("hidden"); }, 1500);
+      if (go < 0) return false;
+      var b = q('#confirmActions button[data-act="anyway"]'); if (b) b.click();
+      return true;
+    }
+    async function exportNow(label, ms) {
+      var n0 = EX.done;
+      if (q("#exGo").disabled) { var r0 = snap(label); r0.export_finished = false; r0.disabled = true; return r0; }
+      q("#exGo").click();
+      out["notice_" + label] = await answerNotice();
+      var ok = await until(function () { return EX.done > n0 && !EX.busy; }, ms || 90000);
+      await sleepE(300);
+      var r = snap(label); r.export_finished = ok >= 0; return r;
+    }
+    async function ready(kind) { return until(function () { var t = tile(kind); return t && t.state === "ready"; }, 90000); }
+    await until(function () { return S.order.length > 0 && S.order.every(function (n) { return (S.events[n] || []).length > 0; }); }, 40000);
+    await settle();
+    out.regions = (await inv("plugin_host_regions")).v;
+    out.events = {};
+    for (var i = 0; i < S.order.length; i++) { var g = await inv("events_get", { sid: S.sid, name: S.order[i] }); out.events[S.order[i]] = g.v ? g.v.events : null; }
+    out.menu = await openFromMenu();
+    var st0 = await inv("plugin_deliver_state"); out.rows = st0.v ? st0.v.rows.map(function (r) { return { id: r.id, name: r.name }; }) : [];
+    if (OTHER === "stuck") {
+      EX.waitMs = 2500;
+      snap("open");
+      await exportNow("stuck", 40000);
+      out.default = EX.def; post(Object.assign({ kind: "exportrows" }, out)); return;
+    }
+    if (OTHER === "late") {   // a hit changes while the export copies (the fault slow-copy keeps the copy open): the dialog must deliver the NEW set
+      await ready("#exDragMidi"); await ready("#exDragSpikes");
+      var rowL = out.regions.rows[0], homeL = rowL.srcs[0], clipL = rowL.clips.filter(function (c) { return c.src === homeL; })[0];
+      var nL = EX.done;
+      q("#exGo").click();
+      out.notice_late = await answerNotice();
+      await sleepE(600);
+      var edL = await inv("events_edit", { sid: S.sid, name: homeL, ops: [{ op: "add", t: clipL.a + 1.07, v: 100 }] });
+      out.edit = { ok: edL.ok, song: clipL.s + 1.07 };
+      await until(function () { return EX.done > nL && !EX.busy; }, 120000);
+      await sleepE(300);
+      snap("late");
+      post(Object.assign({ kind: "exportrows" }, out)); return;
+    }
+    await ready("#exDragMidi");
+    snap("open");
+    var plan = await inv("plugin_deliver_plan", { items: out.rows.map(function (r) { return { row: r.id, kind: "midi" }; }) }); out.plan = plan;
+    out.default = EX.def;
+    await exportNow("export1", 120000);
+    // the files of the handles for the same items: the bytes must be equal
+    var items = []; out.rows.forEach(function (r) { items.push({ row: r.id, kind: "midi" }); items.push({ row: r.id, kind: "spike" }); });
+    out.take = await inv("plugin_deliver_take", { items: items });
+    // the single mode: the merged MIDI file
+    q("#exModeSingle").click(); await sleepE(200);
+    snap("single");
+    out.take_merged = await inv("plugin_deliver_take", { items: [{ row: "", kind: "merged" }] });
+    await exportNow("export_single", 60000);
+    q("#exModeTrack").click(); await sleepE(100);
+    // the scope "Selected track": the single mode is off with its reason, the export holds that track only
+    q("#exModeSingle").click(); await sleepE(100);
+    var sel = out.regions && out.regions.rows ? out.regions.rows[0] : null;
+    var lane = document.querySelector("#lanesScroll .track .tdel"); EX.selected = lane ? lane.closest(".track").dataset.name : (sel ? sel.srcs[0] : S.order[0]);
+    q("#exScopeSel").click(); await sleepE(300);
+    snap("selected");
+    q("#exScopeAll").click(); await sleepE(200);
+    q("#exModeTrack").click(); await sleepE(100);
+    // Choose...: the sheet is answered by DS_ARA_PICK_DIR; Export writes there
+    var before = EX.dest;
+    if (PICK && EX.dest !== PICK) { q("#exChoose").click(); await until(function () { return EX.dest !== before; }, 15000); }
+    snap("chosen");
+    await exportNow("export_chosen", 120000);
+    // the type Both: the audio spike files
+    q("#exSpikeBoth").click(); await sleepE(200);
+    await ready("#exDragSpikes");
+    snap("both");
+    await exportNow("export_both", 120000);
+    // an edit and AT ONCE Export: the new hit is in the file the dialog writes (it waits for the new set)
+    var home = out.rows.length ? out.regions.rows[0].srcs[0] : S.order[0], clip = out.regions.rows[0].clips.filter(function (c) { return c.src === home; })[0];
+    var ed = await inv("events_edit", { sid: S.sid, name: home, ops: [{ op: "add", t: clip.a + 1.05, v: 100 }] });
+    out.edit = { ok: ed.ok, song: clip.s + 1.05 };
+    q("#exSpikeSynth").click(); await sleepE(50);
+    await exportNow("export_after_edit", 120000);
+    // the forged calls: a row that is no row, a name and a path in an item, a folder that is not allowed (the folder of the fault runs is T.arg)
+    out.forged = {};
+    out.forged.row = await inv("plugin_deliver_export", { items: [{ row: "../etc", kind: "midi" }], start: false });
+    out.forged.plan_row = await inv("plugin_deliver_plan", { items: [{ row: "no-such-row", kind: "midi" }] });
+    out.forged.name = await inv("plugin_deliver_export", { items: [{ row: out.rows[0].id, kind: "midi", name: "../escape.mid" }], dest: PICK, start: false });
+    out.forged.dest = await inv("plugin_deliver_export", { items: [{ row: out.rows[0].id, kind: "midi" }], dest: OTHER || "/tmp", start: false });
+    out.forged.sub = await inv("plugin_deliver_export", { items: [{ row: out.rows[0].id, kind: "midi" }], dest: (PICK || "/tmp") + "/sub", start: false });
+    out.forged.path = await inv("plugin_deliver_export", { items: [{ row: out.rows[0].id, kind: "midi" }], path: "/tmp/x.mid", start: false });
+    out.state_end = (await inv("plugin_deliver_state")).v;
+    q("#exCancel").click();
+    post(Object.assign({ kind: "exportrows" }, out));
   }
   async function refuse(names) {   // F3: the page cannot change the track set
     var sid = S.sid, name = names[0], out = {};

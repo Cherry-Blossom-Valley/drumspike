@@ -37,7 +37,39 @@ const EX = { open: false, scope: "all", selected: null, midi: true, spikes: true
   infoSeq: 0, lastFile: null, ran: false, tempoSeq: 0, tempoDefault: false,
   /* #151: the default-tempo answer holds per project (loadProject resets it when a project opens) */
   tempoAck: false };
+/* #589: in a DAW the dialog works on DAW TRACKS (the rows of the plugin, DLV.st.rows), not on audio files, and it makes what the drag handles make: one file per
+   DAW track and kind, the files that the plugin prepared (plugins/ara/src/prepare.rs). Everything for it is behind hostMode(); the standalone dialog is as before. */
+function exHostRows() { return typeof DLV !== "undefined" && DLV.st ? DLV.st.rows : []; }
+function exHostSelRow() { return EX.selected && typeof DLV !== "undefined" ? DLV.rowFor(EX.selected) : null; }
+const exLabel = n => (hostMode() ? n : trackLabel(n));
+/* The single file mode is the merged MIDI file: it holds all tracks, so a selected track cannot have it. */
+const exMode = () => (hostMode() && EX.scope === "selected" ? "per_track" : EX.mode);
+function exHostItems(kind) {   // the items (row, kind) of a tile or of the export: kind "midi", "spikes" or "all"
+  const ids = exTrackSets().names, items = [];
+  if ((kind === "midi" || kind === "all") && EX.midi) {
+    if (exMode() === "single") { if (ids.length) items.push({ row: "", kind: "merged" }); }
+    else ids.forEach(id => items.push({ row: id, kind: "midi" }));
+  }
+  if ((kind === "spikes" || kind === "all") && EX.spikes) {
+    const ks = EX.spikeType === "audio" ? ["audio"] : EX.spikeType === "both" ? ["spike", "audio"] : ["spike"];
+    ks.forEach(k => ids.forEach(id => items.push({ row: id, kind: k })));
+  }
+  return items;
+}
+function exHostState(it) {   // the state of one item, from the plugin's payload
+  if (!DLV.st) return { state: "preparing", n: 0, why: "" };
+  if (it.kind === "merged") return DLV.st.merged;
+  const r = DLV.st.rows.find(x => x.id === it.row);
+  return r ? r[it.kind] : { state: "none", n: 0, why: "no hits" };
+}
+function exHostWant() {   // a spike kind that the options need is prepared on first use (the plugin keeps it current from then on)
+  for (const k of ["spike", "audio"]) if (exHostItems("all").some(it => it.kind === k && exHostState(it).state === "off")) DLV.want(k);
+}
 function exTrackSets() {   // the tracks the options name: the ones that export, and the skipped ones with the reason
+  if (hostMode()) {
+    const rows = EX.scope === "selected" ? [exHostSelRow()].filter(Boolean) : exHostRows(), ok = r => r.midi.state !== "none";
+    return { names: rows.filter(ok).map(r => r.id), skipped: rows.filter(r => !ok(r)).map(r => ({ name: r.name, why: "no hits" })) };
+  }
   const pool = EX.scope === "selected" ? (EX.selected && S.tracks[EX.selected] ? [EX.selected] : []) : S.order.slice();
   const ok = n => S.tracks[n] && !S.tracks[n].offline && (S.events[n] || []).length > 0;
   return { names: pool.filter(ok), skipped: pool.filter(n => !ok(n)).map(n => ({ name: n, why: S.tracks[n] && S.tracks[n].offline ? "offline" : "no hits" })) };
@@ -76,21 +108,23 @@ function exDestFold() {
   btn.title = `The files go to ${EX.def || "the folder of the document"}`;   // R2: the default folder is visible without a click
 }
 function exRender() {   // the controls from EX; the Export button and the tiles follow
-  const { names, skipped } = exTrackSets(), all = S.order.length, sel = EX.selected && S.tracks[EX.selected] ? 1 : 0;
+  const { names, skipped } = exTrackSets(), all = hostMode() ? exHostRows().length : S.order.length;
+  const selRow = hostMode() ? exHostSelRow() : null, sel = hostMode() ? (selRow ? 1 : 0) : EX.selected && S.tracks[EX.selected] ? 1 : 0;
   $("#exScopeAll").checked = EX.scope === "all"; $("#exScopeSel").checked = EX.scope === "selected";
   $("#exAllText").textContent = `All tracks (${all})`;
-  $("#exSelText").textContent = sel ? `Selected track (1): ${trackLabel(EX.selected)}` : "Selected track (none selected)";
+  $("#exSelText").textContent = sel ? `Selected track (1): ${hostMode() ? selRow.name : trackLabel(EX.selected)}` : "Selected track (none selected)";
   $("#exScopeSel").disabled = !sel; $("#exScopeSel").closest(".exRow").classList.toggle("off", !sel);
-  $("#exSkipped").textContent = skipped.length ? `Skipped: ${skipped.map(k => `${trackLabel(k.name)} (${k.why})`).join(", ")}` : "";
+  $("#exSkipped").textContent = skipped.length ? `Skipped: ${skipped.map(k => `${exLabel(k.name)} (${k.why})`).join(", ")}` : "";
   $("#exMidi").checked = EX.midi; $("#exSpikes").checked = EX.spikes;
   $("#exMarkers").checked = EX.markers;
-  $("#exModeTrack").checked = EX.mode === "per_track"; $("#exModeSingle").checked = EX.mode === "single";
+  $("#exModeTrack").checked = exMode() === "per_track"; $("#exModeSingle").checked = exMode() === "single";
   $("#exSpikeSynth").checked = EX.spikeType === "synthetic"; $("#exSpikeAudio").checked = EX.spikeType === "audio"; $("#exSpikeBoth").checked = EX.spikeType === "both";
   for (const id of ["#exSpikeSynth", "#exSpikeAudio", "#exSpikeBoth"]) { $(id).disabled = !EX.spikes; $(id).closest(".exRow").classList.toggle("off", !EX.spikes); }
   const cal = S.order.filter(n => smOf(n));   // P4-7c: the tracks with a sampler calibration
   $("#exComp").checked = EX.comp; $("#exComp").disabled = !EX.midi; $("#exComp").closest(".exRow").classList.toggle("off", !EX.midi);
   $("#exComp").closest(".exRow").title = cal.length ? `The MIDI notes of ${cal.map(trackLabel).join(", ")} move by the sampler offset (the aligned attack minus the offset)` : "No track has a sampler calibration yet (Inspector > Layer > Calibration MIDI…)";
   for (const id of ["#exModeTrack", "#exModeSingle"]) { $(id).disabled = !EX.midi; $(id).closest(".exRow").classList.toggle("off", !EX.midi); }
+  if (hostMode()) exHostModeText();
   $("#exDest").value = EX.dest; $("#exDest").title = EX.dest;
   $("#exReset").disabled = EX.dest === EX.def;
   let problem = EX.destNote;
@@ -104,6 +138,7 @@ function exRender() {   // the controls from EX; the Export button and the tiles
     const t = $(k === "midi" ? "#exDragMidi" : "#exDragSpikes");
     t.classList.toggle("hidden", !EX[k]);
     if (!EX[k]) continue;
+    if (hostMode()) { exHostDragHint(); exHostTile(t, k, names.length); continue; }
     const files = EX.drag[k];
     t.dataset.state = !names.length || !EX.midi && !EX.spikes ? "disabled" : EX.drag.failed ? "error" : files ? "ready" : "preparing";
     t.querySelector(".exDragN").textContent = t.dataset.state === "preparing" ? "preparing…" : files ? exPlural(files.length, "file", "files") : "";
@@ -117,6 +152,26 @@ function exRender() {   // the controls from EX; the Export button and the tiles
   $("#exDragMidi .exDragW").classList.toggle("hidden", !(EX.midi && EX.tempoDefault && !EX.tempoAck));
   exHostNote();
   exDestFold();
+}
+/* #589: a tile in a DAW is the aggregate state of the items it holds (the same states as the handles); it drags with plugin_deliver_take. */
+function exHostDragHint() {   // R12: the sentence stands next to the tiles (an element that only a DAW makes)
+  let h = document.getElementById("exDragHint");
+  if (!h) { h = document.createElement("div"); h.id = "exDragHint"; h.className = "dlvHint exDragHint"; $("#exDrags").after(h); }
+  h.textContent = DLV_HINT;
+}
+function exHostTile(t, k, n) {
+  const items = exHostItems(k), st = DLV.agg(items.map(exHostState));
+  t.dataset.state = !n || !items.length || (!EX.midi && !EX.spikes) ? "disabled" : st.state === "ready" ? "ready" : st.state === "error" ? "error" : st.state === "none" ? "disabled" : "preparing";
+  const why = st.state === "error" ? `error: ${st.why || "the files could not be prepared"}` : "";
+  t.querySelector(".exDragN").textContent = t.dataset.state === "preparing" ? "preparing…" : why ? (why.length > 60 ? why.slice(0, 57) + "…" : why) : st.state === "ready" ? exPlural(st.n, "file", "files") : "";
+  t.querySelector(".exDragN").title = why;
+}
+/* #589: the single file mode is the merged MIDI file in a DAW (one MIDI track with all drums); with one selected track it is off, with the reason. */
+function exHostModeText() {
+  const row = $("#exModeSingle").closest(".exRow"), sel = EX.scope === "selected";
+  row.lastChild.textContent = " One MIDI track with all drums (one file)";
+  row.title = sel ? "One MIDI track with all drums needs All tracks: choose All tracks to use it" : "One MIDI file with one MIDI track that holds the drums of all tracks";
+  if (sel) { $("#exModeSingle").disabled = true; row.classList.add("off"); }
 }
 /* #560: in a DAW the dialog says where the tempo of the MIDI comes from, how many exported tracks have a time-stretched region (the
    files are made all the same) and where to drop the files (#575: the session start). With the mode off nothing here shows. */
@@ -132,16 +187,30 @@ function exHostNote() {
     h.source === "transport" ? `MIDI tempo: one tempo from the host, ${Math.round(h.bpm * 100) / 100} BPM, no tempo map` :
     h.source === "transport-varies" ? `MIDI tempo: the host's tempo changes, the file has one tempo, ${Math.round(h.bpm * 100) / 100} BPM` :
     "MIDI tempo: none from the host, the file has 120 BPM");
-  const names = exTrackSets().names, st = (h.stretched || []).filter(n => names.includes(n));
+  const names = exTrackSets().names;   // in a DAW the stretched list holds audio file names: a DAW track counts when one of its files is in it
+  const st = hostMode() ? exHostRows().filter(r => names.includes(r.id) && r.srcs.some(n => (h.stretched || []).includes(n))) : (h.stretched || []).filter(n => names.includes(n));
   if (st.length) parts.push(`${st.length} exported track${st.length === 1 ? " has" : "s have"} a region that the host stretches in time: the hits follow the stretch as one linear factor; warp markers inside a clip are not followed`);
   parts.push("Files start at song position 0: drop them at the start of the session in your DAW");   // #575: where to drop them; no development note
   el.textContent = parts.join(". ") + ".";
   el.classList.remove("hidden");
 }
-async function exInfo() {   // the replace count of the current options (the newest answer wins)
+/* #589 round 2: in a DAW the plan call of a change waits 150 ms: a burst of changes (the options, the states of the plugin) makes ONE call, the newest wins. */
+function exInfo() {
+  if (!hostMode()) return exInfoRun();
+  if (EX.infoNow) { EX.infoNow = false; return exInfoRun(); }   // the dialog just opened: the first call is not delayed
+  clearTimeout(EX.infoTimer);
+  return new Promise(ok => { EX.infoTimer = setTimeout(() => ok(exInfoRun()), 150); });
+}
+async function exInfoRun() {   // the replace count of the current options (the newest answer wins)
   const my = ++EX.infoSeq;
   if (!exFormats().length || !exTrackSets().names.length) { EX.replace = 0; exRender(); return; }
   try {
+    if (hostMode()) {   // #589: the files of the DAW tracks that the folder already holds
+      const p = await exWait(B.deliverPlan(exHostItems("all"), EX.dest));
+      if (my !== EX.infoSeq || !EX.open) return;
+      EX.replace = p.replace; EX.destOk = true; EX.destNote = EX.destNote.startsWith("The folder") ? EX.destNote : "";
+      exRender(); return;
+    }
     const r = await exWait(B.exportExisting(S.sid, exOpts(true)));
     if (my !== EX.infoSeq || !EX.open) return;
     EX.replace = r.count; EX.destOk = true; EX.destNote = EX.destNote.startsWith("The folder") ? EX.destNote : "";
@@ -154,6 +223,7 @@ async function exInfo() {   // the replace count of the current options (the new
   exRender();
 }
 function exDragSchedule(now) {   // the tiles show "preparing…" until the files of the new options are there
+  if (hostMode()) { exHostWant(); exRender(); return; }   // #589: the tiles show the prepared sets of the plugin: nothing is rendered here
   clearTimeout(EX.timer);
   const my = ++EX.dragSeq;
   EX.drag = { midi: null, spikes: null, failed: false };
@@ -231,6 +301,7 @@ async function openExport(scope, track) {
     }
   }
   EX.open = true; EX.destOpen = false;   // #575: a DAW starts with the destination row collapsed
+  EX.infoNow = true;
   $("#exportModal").classList.remove("hidden");
   document.addEventListener("keydown", exKey, true);
   exChanged();
@@ -241,10 +312,13 @@ function exClose() {
   EX.open = false; clearTimeout(EX.timer); EX.dragSeq++;
   $("#exportModal").classList.add("hidden");
   document.removeEventListener("keydown", exKey, true);
+  if (hostMode()) return;   // #589: the prepared files stay with the plugin; the dialog made none
   const sid = S.sid;   // the files of the tiles go: they can be big (a spike file has the length of its audio)
   EX.dragChain = EX.dragChain.then(() => B.exportDragPrepare(sid, { clear: true }).catch(() => {}));
 }
-function exCancel() { exClose(); $("#exCancel").textContent = "Cancel"; if (!EX.ran) setMsg("export cancelled"); }   // after an export (even a failed one) the message keeps its result
+function exCancel() {
+  if (hostMode() && EX.busy) { EX.cancel = true; B.deliverProgress(true).catch(() => {}); return; }   // #589: a running export stops before its first rename
+  exClose(); $("#exCancel").textContent = "Cancel"; if (!EX.ran) setMsg("export cancelled"); }   // after an export (even a failed one) the message keeps its result
 function exKey(ev) {   // the dialog owns every key: no page key (Space plays, J snaps) runs while it is open
   if (ev.key === "Escape") { ev.preventDefault(); ev.stopPropagation(); exCancel(); return; }
   if (ev.key === "Enter" && ev.target.tagName !== "BUTTON") { ev.preventDefault(); ev.stopPropagation(); exRun(); return; }
@@ -276,7 +350,7 @@ function exSamplerNote(r) {   // P4-7c: which tracks' notes moved by the sampler
 }
 function exSummary(r) {   // "exported 2 MIDI and 2 spike files to Exports/ in the project folder (0.1 s)"; #218 counts the audio spike files
   const parts = [];
-  if (r.midi_file) parts.push("1 multi-track MIDI");
+  if (r.midi_file) parts.push(hostMode() ? "1 merged MIDI" : "1 multi-track MIDI");
   else if (r.midi) parts.push(`${r.midi} MIDI`);
   if (r.spikes) parts.push(`${r.spikes} spike`);
   if (r.audio) parts.push(`${r.audio} audio spike`);
@@ -313,13 +387,13 @@ async function exRun() {
     if (a !== "anyway") { EX.busy = false; setMsg("export cancelled"); if (a === "set_tempo") detectTempo(); if (EX.open) exRender(); return; }   // no file is written; #478: the render takes the Export button back — a render that landed while the notice held busy disabled it (line 79) and only a render takes that back
     EX.tempoAck = true;   // the answer holds for this project: the next export does not ask again
   }
-  const o = exOpts(true), n = o.tracks.length;
+  const o = exOpts(true), n = hostMode() ? exHostItems("all").length : o.tracks.length;
   EX.ran = true; $("#exCancel").textContent = "Close"; exRender();
   try {
     await flushEvents();   // the service writes from its own copy of the events
     showProgress(0, `Exporting 0/${n}`);
     let live = true;   // a message that arrives after the answer (the test bridge polls) must not override the result
-    const r = await B.exportAll(S.sid, p => { if (live && p.state === "running") showProgress(Math.round(100 * p.done / Math.max(1, p.total)), `Exporting ${p.done}/${p.total} — ${p.track}`); }, o);
+    const r = hostMode() ? await exHostExport() : await B.exportAll(S.sid, p => { if (live && p.state === "running") showProgress(Math.round(100 * p.done / Math.max(1, p.total)), `Exporting ${p.done}/${p.total} — ${p.track}`); }, o);
     live = false;
     const bad = r.errors || [];
     showProgress(100, bad.length ? `export done: ${bad.length} problems` : "export done");
@@ -339,10 +413,50 @@ async function exRun() {
     $("#exResultText").textContent = msg.replace(/^exported/, "Exported");
     $("#exResult").classList.toggle("hidden", !EX.lastFile);
     exInfo();
-  } catch (e) { hideProgress(); setMsg(`export failed: ${e.message}`, "error"); setMsgDetail(e.detail); EX.destNote = errText(e); }
+  } catch (e) {
+    hideProgress();
+    if (hostMode() && /cancelled: nothing was written/.test(String(e.message))) setMsg("export cancelled: nothing was written");   // N8
+    else { setMsg(`export failed: ${hostMode() ? String(e.message).replace(/^(409|500): /, "") : e.message}`, "error"); setMsgDetail(e.detail); EX.destNote = errText(e); }
+  }
   finally { EX.busy = false; EX.done++; if (EX.open) exRender(); }   // #172: done is the export-finished event
 }
+/* #589: Export in a DAW. The plugin copies the files that it prepared for the chosen DAW tracks into the folder (all or nothing). A set that is not ready for
+   the hits of now answers 409 "preparing": the dialog waits (progress, the 30 s of the dialog), asks again and never writes an old file. On the limit it says which
+   DAW track is not ready and nothing was written. Cancel stops it before the first rename. */
+async function exHostExport() {
+  const items = exHostItems("all"), t0 = Date.now(), limit = EX.waitMs || 30000, dest = EX.dest;
+  let start = true, last = "";
+  EX.cancel = false;
+  for (;;) {
+    const poll = setInterval(() => B.deliverProgress(false).then(p => { if (p && p.busy) showProgress(Math.round(100 * p.done / Math.max(1, p.total)), `Exporting ${p.done}/${p.total} — ${p.track}`); }).catch(() => {}), 250);
+    try {
+      const r = await B.deliverExport(items, dest, start);
+      r.dest = dest; r.elapsed_ms = Date.now() - t0; r.midi_file = r.merged; r.outside_song = { all: r.outside_song };
+      return r;
+    } catch (e) {
+      const m = String(e && e.message || e), waiting = e && e.status === 409 && /(^|: )(preparing|not prepared yet)/.test(m.replace(/^409: /, ""));
+      if (waiting && EX.cancel) throw new Error("cancelled: nothing was written");   // a cancel during the wait is a cancel, not a failure
+      if (!waiting) throw e;
+      last = m.replace(/^409: /, "").split(": ")[0];
+      if (Date.now() - t0 > limit) throw new Error(`${last && !/^preparing$/.test(last) ? last : "a DAW track"} is not ready after ${Math.round(limit / 1000)} s: nothing was written`);
+      start = false;
+      const rows = exHostItems("all"), done = rows.filter(it => exHostState(it).state === "ready").length;
+      showProgress(Math.round(100 * done / Math.max(1, rows.length)), `Preparing ${done}/${rows.length}`);
+      await new Promise(ok => setTimeout(ok, 300));
+    } finally { clearInterval(poll); }
+  }
+}
 async function exDragStart(kind) {
+  if (hostMode()) {   // #589: the files of the tile are the prepared sets, taken like the handles take them
+    let files;
+    try { files = (await B.deliverTake(exHostItems(kind === "midi" ? "midi" : "spikes"))).files; }
+    catch (e) { setMsg(`drag refused: ${errText(e)}`, "error"); DLV.pull(); return; }
+    const n = exPlural(files.length, "file", "files");
+    setMsg(`Dragging ${n}: ${DLV_HINT.charAt(0).toLowerCase() + DLV_HINT.slice(1)}`);   // R12: the hint shows at the START of the drag
+    B.dragFiles(files).then(() => setMsg(`dragged ${n}. ${DLV_LATE}`))
+      .catch(e => setMsg(`drag failed: ${errText(e)}`, "error"));
+    return;
+  }
   const files = EX.drag[kind];
   if (!files || !files.length) return;
   /* #151: a drag of the MIDI tile on the default map writes 120 BPM MIDI: the press asks the same notice

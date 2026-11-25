@@ -685,7 +685,7 @@ fn poll_channel(sh: &Arc<Shared>, id: &str, total: std::time::Duration) -> Vec<V
 
 /// The commands that `call::run` leaves to the desktop shell (`SHELL_ONLY` of
 /// `crates/app/src/call.rs`), plus the one command of the drag plugin. Each has an answer.
-const SHELL_COMMANDS: [&str; 47] = [
+const SHELL_COMMANDS: [&str; 50] = [
     "plugin_report",
     "plugin_defaults_get",
     "plugin_defaults_save_role",
@@ -701,6 +701,9 @@ const SHELL_COMMANDS: [&str; 47] = [
     "plugin_deliver_state",
     "plugin_deliver_take",
     "plugin_deliver_want",
+    "plugin_deliver_plan",
+    "plugin_deliver_export",
+    "plugin_deliver_progress",
     "plugin_host_offer",
     "plugin_host_play",
     "plugin_host_stop",
@@ -1107,6 +1110,14 @@ fn shell_command(sh: &Arc<Shared>, cmd: &str, args: &Value) -> Option<Answer> {
             None => Answer::err(400, "kind must be midi, spike, audio or merged"),
         },
         "plugin_deliver_take" => deliver_take(sh, args),
+        "plugin_deliver_plan" => deliver_plan(sh, cmd, args),
+        "plugin_deliver_export" => deliver_export(sh, cmd, args),
+        "plugin_deliver_progress" => Answer::json(
+            200,
+            &sh.backend
+                .prep
+                .export_progress(args.get("cancel").and_then(Value::as_bool).unwrap_or(false)),
+        ),
         "plugin_host_play" => host_request(sh, crate::playback::Kind::Play, args),
         "plugin_host_stop" => host_request(sh, crate::playback::Kind::Stop, args),
         "plugin_host_locate" => host_request(sh, crate::playback::Kind::Locate, args),
@@ -1371,6 +1382,97 @@ fn deliver_take(sh: &Arc<Shared>, args: &Value) -> Answer {
             Answer::json(200, &json!({"files": strs}))
         }
         Err((code, text)) => Answer::err(code, text),
+    }
+}
+
+/// M1c4 (#589): the folder of an export of the dialog: the one `dest` names when the rule of #579 allows it (the default folder, or a folder chosen
+/// in the sheet), else the default folder `Exports/` of the document (made when it is missing). The service checks that it is a writable folder.
+fn deliver_dest(sh: &Arc<Shared>, cmd: &str, args: &Value) -> Result<PathBuf, Answer> {
+    let default = default_exports(sh);
+    if !crate::deliver::dest_allowed_in(&allowed_folders(sh), default.as_deref(), cmd, args) {
+        return Err(Answer::err(
+            403,
+            format!("{cmd} writes only to the folder of the document or a folder chosen in the folder dialog"),
+        ));
+    }
+    let named = args.get("dest").and_then(Value::as_str).filter(|s| !s.is_empty());
+    let dest = match (named, default.as_deref()) {
+        (Some(d), _) => PathBuf::from(d),
+        (None, Some(d)) => d.to_path_buf(),
+        (None, None) => return Err(Answer::err(409, "error: no export folder")),
+    };
+    if default
+        .as_deref()
+        .is_some_and(|d| crate::deliver::is_default_dest(d, &dest))
+    {
+        let existed = dest.is_dir();
+        std::fs::create_dir_all(&dest).map_err(|e| Answer::err(500, format!("{}: {e}", dest.display())))?;
+        if !existed {
+            // the stage export-dialog reads this row: the first call that names the default folder found it missing
+            session().log(json!({"event": "default_dest_made", "editor": sh.n, "command": cmd}).to_string());
+        }
+    }
+    drumspike_app::export::check_dest(&dest.display().to_string()).map_err(|e| Answer::error(&e))?;
+    Ok(dest)
+}
+
+/// `plugin_deliver_plan {items, dest?}`: the file names that an export of the items writes into the folder, and how many of them exist there (the
+/// replace count of the dialog). It writes nothing.
+fn deliver_plan(sh: &Arc<Shared>, cmd: &str, args: &Value) -> Answer {
+    let Some(items) = args.get("items").and_then(Value::as_array) else {
+        return Answer::err(400, "items must be a list of {row, kind}");
+    };
+    let dest = match deliver_dest(sh, cmd, args) {
+        Ok(d) => d,
+        Err(a) => return a,
+    };
+    match sh.backend.prep.export_names(items) {
+        Ok(names) => {
+            let files: Vec<Value> = names
+                .iter()
+                .map(|(row, kind, name, track)| {
+                    let exists = crate::prepare::replaces(&dest.join(name));
+                    json!({"row": row, "kind": kind.word(), "name": name, "track": track, "exists": exists})
+                })
+                .collect();
+            let replace = files.iter().filter(|f| f["exists"] == json!(true)).count();
+            Answer::json(
+                200,
+                &json!({"files": files, "replace": replace, "dest": dest.display().to_string()}),
+            )
+        }
+        Err((code, text)) => Answer::err(code, text),
+    }
+}
+
+/// `plugin_deliver_export {items, dest?, start?}`: copy the prepared files of the items into the folder (`Prep::export_to`). Nothing is written when a set
+/// is not ready (409; the page asks again), on a cancel, or on a failed copy.
+fn deliver_export(sh: &Arc<Shared>, cmd: &str, args: &Value) -> Answer {
+    let Some(items) = args.get("items").and_then(Value::as_array) else {
+        return Answer::err(400, "items must be a list of {row, kind}");
+    };
+    let dest = match deliver_dest(sh, cmd, args) {
+        Ok(d) => d,
+        Err(a) => return a,
+    };
+    let Some(svc) = sh.backend.page.service() else {
+        return Answer::err(503, "the document of this editor is closed");
+    };
+    let protected = svc.protected_files_everywhere();
+    let start = args.get("start").and_then(Value::as_bool).unwrap_or(false);
+    match sh.backend.prep.export_to(items, &dest, &protected, start) {
+        Ok(v) => {
+            note_written(sh, &v);
+            Answer::json(200, &v)
+        }
+        Err(e) if !e.written.is_empty() || !e.not_written.is_empty() => {
+            // a rename failed after others were done: the answer lists both
+            Answer::json(
+                e.code,
+                &json!({"code": e.code, "message": e.text, "written": e.written, "not_written": e.not_written}),
+            )
+        }
+        Err(e) => Answer::err(e.code, e.text),
     }
 }
 
@@ -2478,6 +2580,9 @@ mod tests {
                     "plugin_deliver_state",
                     "plugin_deliver_take",
                     "plugin_deliver_want",
+                    "plugin_deliver_plan",
+                    "plugin_deliver_export",
+                    "plugin_deliver_progress",
                     "plugin_host_play",
                     "plugin_host_stop",
                     "plugin_host_locate",

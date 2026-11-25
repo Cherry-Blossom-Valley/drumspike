@@ -599,7 +599,8 @@ body.host .track.hostHidden, body.host .track.hostMerged { display: none; }   /*
 .dlvH[data-state="error"] .dlvT { color: var(--red, #e5534b); }
 .dlvBar { display: inline-flex; gap: 4px; align-items: center; margin-left: 6px; }
 .dlvBar .dlvH { flex-direction: row; gap: 4px; align-items: center; max-width: 200px; }
-.dlvHint { font-size: 10px; color: var(--dim); white-space: nowrap; }
+.dlvHint { font-size: 11px; font-weight: 600; color: var(--accent); white-space: nowrap; }   /* R12 (#589): a visible note, not dim */
+#exportModal .exDragHint { white-space: normal; margin: 4px 0 0; }
 .dlvM { padding: 0 6px; }
 .dlvH[data-state="error"] { cursor: pointer; }
 .dlvH:focus-visible, .dlvItem:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }

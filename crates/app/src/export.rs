@@ -245,8 +245,13 @@ pub(crate) fn same_file_path(a: &Path, b: &Path) -> bool {
     path_key(a) == path_key(b)
 }
 
-/// R01: 409 when one of `outputs` would write a `protected` file. The message names both.
-pub(crate) fn check_export_plan(outputs: &[PathBuf], protected: &[PathBuf]) -> Result<(), AppError> {
+/// R01: 409 when one of `outputs` would write a `protected` file. The message names both. Public since #589: the plugin checks the files of its export
+/// dialog with this one rule.
+///
+/// # Errors
+///
+/// 409 (`AppError::conflict`) naming the output and the protected file.
+pub fn check_export_plan(outputs: &[PathBuf], protected: &[PathBuf]) -> Result<(), AppError> {
     for out in outputs {
         for p in protected {
             if same_file_path(out, p) {
@@ -891,7 +896,8 @@ impl Service {
     /// R01 (#248): the protected files of every open project: each track's source, its one-shot
     /// (the layer file) and its sampler bounce. A file that is offline or missing from the
     /// record is not listed.
-    pub(crate) fn protected_files_everywhere(&self) -> Vec<PathBuf> {
+    #[must_use]
+    pub fn protected_files_everywhere(&self) -> Vec<PathBuf> {
         let mut out = Vec::new();
         for op in self.inner.registry.all_open() {
             let g = lock(&op);

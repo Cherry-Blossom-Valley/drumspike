@@ -86,6 +86,8 @@ def test_every_text_that_names_a_track_shows_the_name_of_the_daw_track(host):
 
 
 def test_the_export_dialog_the_follow_menus_and_the_inspector_show_the_name_of_the_daw_track(host):
+    host.evaluate("""daw => { const R = { state: 'ready', n: 1, why: '' }; DLV.take({ gen: 1, merged: R, used: { spike: false, audio: false }, hint: '',
+      rows: S.order.map(n => ({ id: 'r-' + n, name: daw[n] || n, srcs: [n], midi: R, spike: R, audio: R })) }); }""", DAW)
     host.evaluate("() => { S.selTrack = 'Snare Top'; openExport('selected', 'Snare Top'); }")
     host.wait_for_function("() => !document.querySelector('#exportModal').classList.contains('hidden')")
     assert host.locator("#exSelText").inner_text() == "Selected track (1): Drum B"

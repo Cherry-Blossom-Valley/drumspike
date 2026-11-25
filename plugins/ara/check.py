@@ -138,6 +138,10 @@ Stages (`all` runs every one; each prints ok/FAIL with its evidence):
                  editors of one document: no folder error, both drag tiles ready with a file count, a drag
                  starts, Export writes the files, a second open does the same, Choose keeps the folder for
                  the document (faults: the rule of M1c1, no memory of the chosen folder)
+  export-rows    M1c4 (#589): the REAL Export dialog makes ONE file per DAW track and kind, byte-equal to the files of the handles: a track with clips
+                 of three audio files, the merged MIDI, the scope Selected track, a chosen folder, an edit and Export at once (the dialog waits for
+                 the new set), a set that never gets ready, forged rows, names and folders (faults: one file per audio file, a copy of a stale
+                 set, any folder, a subfolder, a name from the page, any row id)
   deliver        M1c3 (#576): the files are made before the user asks: one MIDI, spike and audio spike file per DAW track with the hits of
                  all clips at their song positions, the merged MIDI file, states and the stale rule, the handles in the page, the cost of
                  an edit, a job that never ends, hostile track names (faults: one file per source, a stale take, every row again, one MIDI
@@ -8259,16 +8263,17 @@ def export_dialog_parts(d: dict) -> dict:
         f"Export wrote the files at the first open and after a close: {[(step(r1, k).get('export_finished'), step(r1, k).get('result')) for k in ('export1', 'export2')]}")
     mids, wavs = files_of(default)
     made = [x for x in rows if x.get("event") == "default_dest_made"]
-    parts["export-dialog-folder-missing"] = (len(made) == 1 and made[0].get("command") == "export_existing",
+    parts["export-dialog-folder-missing"] = (len(made) == 1 and made[0].get("command") in ("export_existing", "plugin_deliver_plan"),   # #589: the replace count of the dialog is the plan command now
+
                                              f"Exports/ did not exist (the scenario removes the empty folder) when the dialog first named it: the plugin made it once ({len(made)} rows, by {[x.get('command') for x in made]})")
     parts["export-dialog-files"] = (len(mids) == 4 and len(wavs) == 4, f"{len(mids)} MIDI and {len(wavs)} WAV files in {default.name}/ of the document")
     drag = step(r1, "drag")
     started = [x for x in rows if x.get("event") == "drag_started"]
     pb = {str(Path(p).resolve()) for x in started for p in x.get("pasteboard", [])}
     parts["export-dialog-drag"] = (str(drag.get("msg", "")).startswith("dragged 4 files") and bool(started) and all(x.get("session") == "test" for x in started)
-                                   and pb and all(Path(p).parent.resolve() == default.resolve() for p in pb) and len(pb) == 4,
+                                   and pb and all(Path(p).parent.resolve() in (default.resolve(), (default / "Dragged").resolve()) for p in pb) and len(pb) == 4,   # #589: a take links the prepared files into Exports/Dragged/
                                    f"a press and a move on the Drag MIDI tile ran the drag command up to the items (no system session): message {drag.get('msg')!r}, "
-                                   f"{len(started)} test sessions, private pasteboard {len(pb)} files, all in Exports/")
+                                   f"{len(started)} test sessions, private pasteboard {len(pb)} files, all in Exports/ or Exports/Dragged/")
     ch = step(r1, "chosen")
     cm, cw = files_of(pick)
     cw = [f for f in cw if not f.name.endswith("_audio_spike.wav")]   # the type Both writes the audio files there too
@@ -8313,10 +8318,159 @@ def stage_export_dialog_fault() -> bool:
     parts = export_dialog_parts(d)
     ok = fault_part("export-dialog-fault-old-dest", parts, "export-dialog-no-folder-error",
                     "the default folder is refused as a dest (the rule before #579): the dialog says the folder cannot be used")
-    ok = fault_part("export-dialog-fault-old-dest-tiles", parts, "export-dialog-tiles", "the tiles do not reach ready") and ok
     d = export_dialog_run("fault-no-remember", {"DS_ARA_EDITOR_FAULT": "no-remember"})
     return fault_part("export-dialog-fault-no-remember", export_dialog_parts(d), "export-dialog-remembered",
                       "the chosen folder is not kept: a new editor opens with the default folder") and ok
+
+
+# ---------------------------------------------------------------- M1c4 (#589): the export dialog makes one file per DAW track
+
+def export_rows_run(label: str, env: dict | None = None, stuck: bool = False, late: bool = False) -> dict:
+    """The REAL Export dialog in the REAL page (mode exportrows) on the host of the stage deliver (a DAW track with clips of three audio files, one with one
+    file). The folder sheet is answered by DS_ARA_PICK_DIR; `other` is a folder that the plugin must refuse (it is empty at the end), `pick/sub` exists for the
+    fault run prefix-dest."""
+    base = OUT / f"exrows-{label}"
+    if base.exists():
+        shutil.rmtree(base)
+    pick, other = base / "pick", base / "other"
+    for d in (pick / "sub", other):
+        d.mkdir(parents=True)
+    pick, other = pick.resolve(), other.resolve()
+    e = {"DS_ARA_PICK_DIR": str(pick), "DS_ARA_DRAG_PRESSED": "1"}
+    e.update(env or {})
+    arg = "stuck" if stuck else "late" if late else f"{other};{pick}"
+    rc, summary, rows = editor_run(f"exrows-{label}", "exportrows", CLAP, 1, e, [*DELIVER_ARGS, "--arg", arg], timeout=500)
+    reps = page_reports(rows, "exportrows")
+    return {"rc": rc, "rep": reps[0] if reps else {}, "rows": rows, "pick": pick, "other": other, "base": base.resolve(),
+            "cache": (OUT / f"cache-exrows-{label}").resolve()}
+
+
+def export_rows_parts(d: dict) -> dict:
+    r, pick, other = d["rep"], d["pick"], d["other"]
+    parts: dict = {}
+    steps = {x.get("label"): x for x in r.get("steps", [])}
+    exports = next(iter(sorted(d["cache"].glob("documents/*/project/Exports"))), d["cache"] / "none")
+    top = lambda f: sorted(x for x in f.glob("*") if x.is_file()) if f.is_dir() else []
+    rows = r.get("rows") or []
+    names = {x["id"]: x["name"] for x in rows}
+    parts["export-rows-ran"] = (d["rc"] == 0 and bool(r) and r.get("menu") == "ok" and len(rows) == 2 and steps.get("export1", {}).get("export_finished") is True
+                                and (steps["export1"].get("result") or "").startswith("Exported 2 MIDI and 2 spike files"),
+                                f"the host ran the driver (rc={d['rc']}), the dialog opened from the menu: {r.get('menu')!r}, {len(rows)} DAW tracks, result {steps.get('export1', {}).get('result')!r}")
+    want_names = {"Kick_spike.mid", "Snare_spike.mid", "Kick_spike.wav", "Snare_spike.wav", "Drums_merged.mid"}
+    got_names = {f.name for f in top(exports)}
+    parts["export-rows-files"] = (got_names == want_names,
+                                  f"Export wrote ONE file per DAW track and kind (3 audio files in one track, 1 in the other: 2 MIDI, 2 spike) and the merged MIDI file: {sorted(got_names)}, want {sorted(want_names)}")
+    take = [Path(f) for f in ((r.get("take") or {}).get("v") or {}).get("files", [])]
+    merged = [Path(f) for f in ((r.get("take_merged") or {}).get("v") or {}).get("files", [])]
+    diff = [t.name for t in [*take, *merged] if not (exports / re.sub(r" \d+(\.\w+)$", r"\1", t.name)).is_file() or (exports / re.sub(r" \d+(\.\w+)$", r"\1", t.name)).read_bytes() != t.read_bytes()]
+    parts["export-rows-bytes"] = (len(take) == 4 and len(merged) == 1 and not diff,
+                                  f"the files of the dialog are byte-equal to the files that the handles give ({len(take) + len(merged)} compared, different: {diff})")
+    want = deliver_expected(r)
+    bad = []
+    for f in sorted(exports.glob("*_spike.mid")) if exports.is_dir() else []:
+        row = next((i for i, n in names.items() if f.name == f"{n}_spike.mid"), None)
+        got = midi_note_times(f)
+        w = want.get(row, [])
+        if row is None or len(got) != len(w) or any(abs(a - b) > 2 / 48000 for a, b in zip(got, w)):
+            bad.append((f.name, len(got), len(w)))
+    parts["export-rows-hits"] = (not bad and sorted(len(v) for v in want.values()) == [3, 6],
+                                 f"the MIDI file of the DAW track with three audio files holds the hits of all its clips at their song positions; wrong: {bad}; hits per track {[len(v) for v in want.values()]}")
+    one, sel, st = steps.get("single", {}), steps.get("selected", {}), steps.get("open", {})
+    mg = exports / "Drums_merged.mid"
+    parts["export-rows-single"] = (mg.is_file() and midi_tracks(mg) == 2 and "one midi track with all drums" in (one.get("single_label") or "").lower()
+                                   and "one midi track per" not in (one.get("single_label") or "").lower() and "merged MIDI" in (steps.get("export_single", {}).get("result") or ""),
+                                   f"the single file mode is the merged MIDI file (one note track: {midi_tracks(mg) if mg.is_file() else None} tracks incl. the tempo track), labelled {one.get('single_label')!r}; result {steps.get('export_single', {}).get('result')!r}")
+    parts["export-rows-selected"] = (sel.get("single_disabled") is True and "needs All tracks" in (sel.get("single_title") or "") and (sel.get("sel_text") or "").startswith("Selected track (1): Kick"),
+                                     f"with one selected DAW track the single mode is off with its reason: disabled {sel.get('single_disabled')}, {sel.get('single_title')!r}, {sel.get('sel_text')!r}")
+    parts["export-rows-words"] = (st.get("all_text") == "All tracks (2)" and not any(x.get("body") for x in r.get("steps", [])),
+                                  f"the dialog counts DAW tracks ({st.get('all_text')!r}) and no text says 'source': {[x.get('label') for x in r.get('steps', []) if x.get('body')]}")
+    after = deliver_expected(r, (rows[0]["id"], [(r.get("edit") or {}).get("song", 0.0)])) if rows and r.get("edit") else {}
+    pk = top(pick)
+    f_after = pick / "Kick_spike.mid"
+    got = midi_note_times(f_after) if f_after.is_file() else []
+    w = after.get(rows[0]["id"], []) if rows else []
+    spike = pick / "Kick_spike.wav"
+    peaks = set()
+    if spike.is_file():
+        sw = wav_samples(spike)
+        peaks = {i for i, v in enumerate(sw["xs"]) if v > 0.5}
+        miss = [t for t in w if round(t * sw["rate"]) not in peaks]
+    else:
+        miss = list(w)
+    parts["export-rows-wait"] = (bool((r.get("edit") or {}).get("ok")) and len(got) == len(w) > 0 and all(abs(a - b) <= 2 / 48000 for a, b in zip(got, w)) and not miss,
+                                 f"an edit and Export at once: the dialog waited for the new set, the new hit is in the MIDI file and the spike file ({len(got)} notes, want {len(w)}, spikes missing {len(miss)}), never the old file")
+    audios = [f for f in pk if f.name.endswith("_audio_spike.wav")]
+    parts["export-rows-chosen"] = (str(Path(steps.get("chosen", {}).get("dest", "")).resolve()) == str(pick) and len(audios) == 2 and (pick / "Snare_spike.mid").is_file()
+                                   and "audio spike" in (steps.get("export_both", {}).get("result") or ""),
+                                   f"after Choose the files are in the chosen folder ({[f.name for f in pk]}), the type Both wrote {len(audios)} audio spike files: {steps.get('export_both', {}).get('result')!r}")
+    fg = r.get("forged") or {}
+    code = lambda k: (fg.get(k) or {}).get("code") if not (fg.get(k) or {}).get("ok", True) else 200
+    escaped = [p for p in (d["base"] / "escape.mid", pick / "escape.mid", exports / "escape.mid", pick.parent / "escape.mid") if p.exists()]
+    parts["export-rows-forged-row"] = (code("row") == 400 and code("plan_row") == 400,
+                                       f"a row id that is no live row is refused: export {code('row')}, plan {code('plan_row')} (want 400, 400)")
+    parts["export-rows-forged-name"] = (code("name") == 400 and not escaped,
+                                        f"a name in an item is refused ({code('name')}, want 400) and no file lands outside the folder: {[str(p) for p in escaped]}")
+    leaked = top(other) + (top(pick / "sub") if (pick / "sub").is_dir() else [])
+    parts["export-rows-forged-dest"] = (code("dest") == 403 and code("sub") == 403 and code("path") == 403 and not leaked,
+                                        f"a folder that is not the default or chosen one, a subfolder of the chosen one and a path key are refused (403): {code('dest')}, {code('sub')}, {code('path')}; written there: {[f.name for f in leaked]}")
+    tmps = [f for folder in (exports, pick) for f in folder.glob(".*.tmp")] if exports.is_dir() else []
+    parts["export-rows-no-tmp"] = (not tmps, f"no temporary file is left behind: {[f.name for f in tmps]}")
+    return parts
+
+
+def export_rows_stuck_parts(d: dict) -> dict:
+    r = d["rep"]
+    stuck = {x.get("label"): x for x in r.get("steps", [])}.get("stuck", {})
+    exports = next(iter(sorted(d["cache"].glob("documents/*/project/Exports"))), d["cache"] / "none")
+    written = sorted(f.name for f in exports.glob("*") if f.is_file()) if exports.is_dir() else []
+    names = [x["name"] for x in r.get("rows", [])]
+    msg = stuck.get("msg") or ""
+    return {"export-rows-stuck": (stuck.get("export_finished") is True and "is not ready after" in msg and any(n in msg for n in names) and "nothing was written" in msg and not written,
+                                  f"a set that never gets ready: the dialog names the DAW track, writes nothing and stops ({msg!r}; files written {written})")}
+
+
+def export_rows_late_parts(d: dict) -> dict:
+    """A hit is added while the export copies (the fault slow-copy keeps the copy open for 2.5 s): the check of the hits after the copy refuses the old files, the dialog
+    waits and delivers the new set. The MIDI file of the first DAW track must hold the new hit."""
+    r = d["rep"]
+    exports = next(iter(sorted(d["cache"].glob("documents/*/project/Exports"))), d["cache"] / "none")
+    rows = (r.get("regions") or {}).get("rows", [])
+    f = exports / "Kick_spike.mid"
+    want = deliver_expected(r, (rows[0]["id"], [(r.get("edit") or {}).get("song", 0.0)])).get(rows[0]["id"], []) if rows and r.get("edit") else []
+    got = midi_note_times(f) if f.is_file() else []
+    late = {x.get("label"): x for x in r.get("steps", [])}.get("late", {})
+    tmps = [x.name for x in exports.glob(".*.tmp")] if exports.is_dir() else []
+    return {"export-rows-late": (bool((r.get("edit") or {}).get("ok")) and late.get("export_finished", True) is not False and len(got) == len(want) > 0
+                                 and all(abs(a - b) <= 2 / 48000 for a, b in zip(got, want)) and not tmps,
+                                 f"a hit added while the export copies: the check after the copy refused the old files and the new set was delivered ({len(got)} notes, want {len(want)}; temporary files {tmps}; result {late.get('result')!r})")}
+
+
+def stage_export_rows() -> bool:
+    if not HOST.exists() or not CLAP.exists():
+        return pass_fail("export-rows", False, "no host or bundle: run check.sh build")
+    ok = print_parts("", export_rows_parts(export_rows_run("clap")))
+    d = export_rows_run("stuck", {"DS_ARA_PREPARE_FAULT": "forever,no-watchdog"}, stuck=True)
+    ok = print_parts("", export_rows_stuck_parts(d)) and ok
+    d = export_rows_run("late", {"DS_ARA_PREPARE_FAULT": "slow-copy"}, late=True)
+    return print_parts("", export_rows_late_parts(d)) and ok
+
+
+def stage_export_rows_fault() -> bool:
+    d = export_rows_run("fault-no-late-check", {"DS_ARA_PREPARE_FAULT": "slow-copy,no-late-check"}, late=True)
+    ok = fault_part("export-rows-fault-no-late-check", export_rows_late_parts(d), "export-rows-late", "the hits are not checked again after the copy: the old files are delivered although a hit changed")
+    for label, env, part, what in (
+        ("per-source", {"DS_ARA_PREPARE_FAULT": "per-source"}, "export-rows-files", "one file per audio file, as the old dialog made them: the file set is not one file per DAW track"),
+        ("stale-ok", {"DS_ARA_PREPARE_FAULT": "stale-ok,no-late-check"}, "export-rows-wait", "a copy that ignores the state of the hits, before and after the copy, writes the old file after an edit"),
+        ("any-dest", {"DS_ARA_EDITOR_FAULT": "any-dest"}, "export-rows-forged-dest", "any folder is allowed: a file lands in a folder that was never chosen"),
+        ("prefix-dest", {"DS_ARA_EDITOR_FAULT": "prefix-dest"}, "export-rows-forged-dest", "a subfolder of the chosen folder is allowed"),
+        ("trust-name", {"DS_ARA_PREPARE_FAULT": "trust-name"}, "export-rows-forged-name", "a name that the page sends is used: a file lands outside the folder"),
+        ("any-row", {"DS_ARA_PREPARE_FAULT": "any-row"}, "export-rows-forged-row", "a row id that is no live row is accepted"),
+    ):
+        d = export_rows_run(f"fault-{label}", env)
+        ok = fault_part(f"export-rows-fault-{label}", export_rows_parts(d), part, what) and ok
+        for p in (d["base"] / "escape.mid", d["pick"] / "escape.mid"):
+            p.unlink(missing_ok=True)
+    return ok
 
 
 # ---------------------------------------------------------------- M1c3 (#576): the files made before the user asks, and the handles
@@ -8444,7 +8598,7 @@ def deliver_parts(d: dict) -> dict:
     parts["deliver-handles"] = (len(strips) == 2 and all([h["kind"] for h in s_] == ["midi", "spike", "audio"] for s_ in strips)
                                 and all([h["state"] for h in s_] == ["ready", "off", "off"] for s_ in strips)
                                 and [h["kind"] for h in d1.get("bar", [])] == ["midi", "spike", "all", "merged"]
-                                and [h["state"] for h in d2.get("bar", [])] == ["ready"] * 4 and d1.get("hint") == "Drop at the start of the session",
+                                and [h["state"] for h in d2.get("bar", [])] == ["ready"] * 4 and d1.get("hint") == "Drop at the start of the session, not at the clip",
                                 f"two DAW tracks have a strip of three handles ({[[h['state'] for h in s_] for s_ in strips]}), the toolbar has four ({[h['kind'] for h in d1.get('bar', [])]}) and "
                                 f"all are ready after the first use ({[h['state'] for h in d2.get('bar', [])]}); the hint {d1.get('hint')!r}")
     return parts
@@ -9232,6 +9386,8 @@ STAGES = {
     "deliver": stage_deliver,
     "deliver-fault": stage_deliver_fault,
     "export-dialog": stage_export_dialog,
+    "export-rows": stage_export_rows,
+    "export-rows-fault": stage_export_rows_fault,
     "export-dialog-fault": stage_export_dialog_fault,
     "delivery-release": stage_delivery_release,
     "delivery-fault": stage_delivery_fault,
@@ -9295,7 +9451,7 @@ ORDER = [
     "editor-selection", "editor-selection-fault",
     "editor-keys", "editor-keys-fault", "editor-keys-twin", "editor-keys-twin-fault",
     "editor-names", "editor-names-fault", "editor-song-rows", "editor-song-rows-fault", "editor-leftovers", "editor-leftovers-fault", "editor-firstopen", "editor-firstopen-fault", "editor-roles", "editor-roles-fault", "restore-settings", "restore-settings-fault",
-    "drag-source", "drag-source-fault", "delivery", "delivery-release", "delivery-fault", "export-dialog", "export-dialog-fault", "deliver", "deliver-fault",
+    "drag-source", "drag-source-fault", "delivery", "delivery-release", "delivery-fault", "export-dialog", "export-dialog-fault", "export-rows", "export-rows-fault", "deliver", "deliver-fault",
     "switches", "switches-fault", "no-unwrap", "no-unwrap-fault",
     "delivery-switches", "delivery-switches-fault", "bundle-version", "bundle-version-fault",
     "conformance", "files", "pluginval", "pluginval-fault", "validate", "universal", "bundle-sign", "bundle-sign-fault", "standalone",
