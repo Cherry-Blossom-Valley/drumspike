@@ -660,6 +660,8 @@ pub struct Prep {
     gate: Mutex<Option<GateFn>>,
     /// M1c4 (#589): the progress and the cancel of the export of the dialog.
     exp: ExportProgress,
+    /// How many full looks at the rows and the hits were made (`gather`); the poll of a waiting export must not make one (#597).
+    looks: std::sync::atomic::AtomicU64,
 }
 
 /// One file of a planned export: `(row id, kind, file name, DAW track)`.
@@ -844,6 +846,7 @@ impl Prep {
             job_open: std::sync::atomic::AtomicBool::new(false),
             gate: Mutex::new(None),
             exp: ExportProgress::default(),
+            looks: std::sync::atomic::AtomicU64::new(0),
         })
     }
 
@@ -978,6 +981,7 @@ impl Prep {
     }
 
     fn gather(&self, refresh: bool) -> Option<Gathered> {
+        self.looks.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         let svc = self.page.service()?;
         let sid = self.page.sid()?;
         let rows = self.rows_now();
@@ -1286,34 +1290,62 @@ impl Prep {
         Ok(picks)
     }
 
+    /// The poll of a waiting export, answered from the books of the worker with no look at the hits (#597). It says `<DAW track>: preparing` only when the
+    /// books show a set that is wanted and is not ready for the hits that the worker saw last (the worker looks again at every change: `wake`), and no
+    /// set is failed, off, or without hits. In every other case it says nothing and the full check decides: so it can only make the dialog wait, never copy a
+    /// set, and never hide an error.
+    fn quick_preparing(&self, items: &[Value]) -> Option<String> {
+        if has("stale-ok") || has("no-quick-poll") {
+            return None;
+        }
+        let rows = self.rows_now();
+        let ids: Vec<&str> = rows.rows.iter().map(|r| r.id.as_str()).collect();
+        let list = check_item_list(&ids, items).ok()?;
+        let blocked = self.blocked();
+        if list
+            .iter()
+            .any(|(id, _)| blocked.iter().any(|(b, _)| b == id || b == "*"))
+        {
+            return Some("preparing: a track is not ready yet".into());
+        }
+        let st = self.lock();
+        let mut first: Option<String> = None;
+        for (id, kind) in &list {
+            let key = (id.clone(), *kind);
+            let used = match kind {
+                Kind::Spike => st.used[0],
+                Kind::Audio => st.used[1],
+                _ => true,
+            };
+            let Some(want) = st.want.get(&key).copied() else {
+                return None; // no books for it yet (the worker has not looked): the full check
+            };
+            if !used || st.failed.contains_key(&key) {
+                return None; // off or failed: the full check starts it or says why
+            }
+            if st.ready.get(&key).is_some_and(|r| r.fp == want) && st.wake_seq == st.clean_seq {
+                continue;
+            }
+            if first.is_none() {
+                let name = if id.is_empty() {
+                    "Merged MIDI".to_string()
+                } else {
+                    st.meta
+                        .iter()
+                        .find(|m| m.0 == *id)
+                        .map_or_else(|| id.clone(), |m| m.1.clone())
+                };
+                first = Some(format!("{name}: preparing"));
+            }
+        }
+        first
+    }
+
     /// Check the items that the page names (M1c4, R10): a row id only from the live rows, a kind that exists, the merged file with no row, nothing else in
     /// an item (no name, no path). The rows with no hit are not an error here: they have no set.
     fn check_items(&self, g: &Gathered, items: &[Value]) -> Result<Vec<(String, Kind)>, (u16, String)> {
-        if items.is_empty() || items.len() > 2048 {
-            return Err((400, "items must list 1 to 2048 entries".into()));
-        }
-        let mut out = Vec::new();
-        for it in items {
-            let Some(o) = it.as_object() else {
-                return Err((400, "an item is {row, kind}".into()));
-            };
-            if o.keys().any(|k| k != "row" && k != "kind") && !has("trust-name") {
-                return Err((400, "an item has only a row and a kind".into()));
-            }
-            let kind = o.get("kind").and_then(Value::as_str).and_then(Kind::parse);
-            let row = o.get("row").and_then(Value::as_str).unwrap_or("");
-            let Some(kind) = kind else {
-                return Err((400, "an item needs a kind: midi, spike, audio or merged".into()));
-            };
-            let live = g.rows.iter().any(|r| r.id == row);
-            if (kind == Kind::Merged) != row.is_empty() || (!row.is_empty() && !live && !has("any-row")) {
-                return Err((400, "unknown DAW track".into()));
-            }
-            if !out.contains(&(row.to_string(), kind)) {
-                out.push((row.to_string(), kind)); // the same row and kind twice is one file
-            }
-        }
-        Ok(out)
+        let ids: Vec<&str> = g.rows.iter().map(|r| r.id.as_str()).collect();
+        check_item_list(&ids, items)
     }
 
     /// The names that an export of `items` would write (see [`ExportName`]): `(row id, kind, file name, DAW track)` in the order of the items. A row with no hit has none.
@@ -1379,6 +1411,13 @@ impl Prep {
             return Err((409, "an export is running".to_string()).into());
         }
         let _running = BusyGuard(&self.exp.running);
+        // #597 (8): the poll of a waiting dialog (not the first call) answers "preparing" from the books of the worker when they say so: a full look at 40 rows
+        // costs about 30 ms (measured), three times a second
+        if !start {
+            if let Some(why) = self.quick_preparing(items) {
+                return Err((409, why).into());
+            }
+        }
         let Some(g) = self.gather(true) else {
             return Err((503, "the document is closed".to_string()).into());
         };
@@ -1511,7 +1550,14 @@ impl Prep {
         let mut written: Vec<String> = Vec::new();
         for (i, (key, _, out)) in plan.iter().enumerate() {
             if let Err(e) = (hooks.rename)(&tmp_of[i], out) {
-                let not_written: Vec<String> = plan[i..].iter().map(|(k, _, _)| self.name_of(&g, &k.0)).collect();
+                // a DAW track with two kinds (MIDI and spike) is named once
+                let mut not_written: Vec<String> = Vec::new();
+                for (k, _, _) in &plan[i..] {
+                    let n = self.name_of(&g, &k.0);
+                    if !not_written.contains(&n) {
+                        not_written.push(n);
+                    }
+                }
                 let total = plan.len();
                 let text = format!(
                     "{} of {total} files were written: {}. Not written: {}. Press Export again. ({}: could not write the file: {e})",
@@ -1739,6 +1785,35 @@ impl Prep {
         drop(st);
         self.push();
     }
+}
+
+/// The check of the items of the page against the ids of the live rows (one place for the full check and the quick poll).
+fn check_item_list(live_ids: &[&str], items: &[Value]) -> Result<Vec<(String, Kind)>, (u16, String)> {
+    if items.is_empty() || items.len() > 2048 {
+        return Err((400, "items must list 1 to 2048 entries".into()));
+    }
+    let mut out = Vec::new();
+    for it in items {
+        let Some(o) = it.as_object() else {
+            return Err((400, "an item is {row, kind}".into()));
+        };
+        if o.keys().any(|k| k != "row" && k != "kind") && !has("trust-name") {
+            return Err((400, "an item has only a row and a kind".into()));
+        }
+        let kind = o.get("kind").and_then(Value::as_str).and_then(Kind::parse);
+        let row = o.get("row").and_then(Value::as_str).unwrap_or("");
+        let Some(kind) = kind else {
+            return Err((400, "an item needs a kind: midi, spike, audio or merged".into()));
+        };
+        let live = live_ids.contains(&row);
+        if (kind == Kind::Merged) != row.is_empty() || (!row.is_empty() && !live && !has("any-row")) {
+            return Err((400, "unknown DAW track".into()));
+        }
+        if !out.contains(&(row.to_string(), kind)) {
+            out.push((row.to_string(), kind)); // the same row and kind twice is one file
+        }
+    }
+    Ok(out)
 }
 
 struct BusyGuard<'a>(&'a std::sync::atomic::AtomicBool);
@@ -2912,6 +2987,34 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    #[test]
+    #[ignore = "a measure: prints numbers"]
+    fn measure_the_waiting_poll_of_the_export_with_forty_rows() {
+        // #597 (8): while the dialog waits for a set it asks `plugin_deliver_export` again every 300 ms; each call looks at all rows once
+        let (n, secs) = (40usize, 60.0f64);
+        let (svc, sid, root) = many_tracks("measure40poll", n, secs, 300);
+        let prep = prep_many(&svc, &sid, &root, n, secs);
+        prep.cycle(true, true);
+        prep.lock().used = [true, false];
+        prep.cycle(true, false); // the spike sets are wanted and not made: the state is preparing
+        let dest = root.join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        let items: Vec<Value> = (0..n).map(|k| it(&format!("q{k}"), "spike")).collect();
+        let e = prep.export_to(&items, &dest, &[], false).unwrap_err();
+        assert_eq!(e.code, 409, "{}", e.text);
+        let reps = 30u32;
+        let t = Instant::now();
+        for _ in 0..reps {
+            let _ = prep.export_to(&items, &dest, &[], false);
+        }
+        let call = t.elapsed().as_secs_f64() * 1000.0 / f64::from(reps);
+        println!(
+            "MEASURE waiting poll, 40 rows, 300 hits each, 40 spike sets preparing: one call {call:.2} ms; at one call per 300 ms that is {:.1} ms per second of waiting",
+            call * 1000.0 / 300.0
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     fn real_hooks_with(rename: RenameFn, copy: CopyFn, after_copy: Box<dyn Fn()>) -> ExportHooks {
         ExportHooks {
             copy,
@@ -3006,6 +3109,42 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// #597: a DAW track with two kinds in a failed export is named once in "Not written".
+    #[test]
+    fn a_daw_track_with_two_kinds_is_named_once_in_not_written() {
+        let _serial = serial();
+        let (_svc, _sid, root, prep, dest, _items) = five_rows("namedonce");
+        prep.lock().used = [true, false];
+        prep.cycle(true, true);
+        let items: Vec<Value> = (0..3)
+            .flat_map(|k| [it(&format!("q{k}"), "midi"), it(&format!("q{k}"), "spike")])
+            .collect();
+        let n = std::cell::Cell::new(0);
+        let hooks = real_hooks_with(
+            Box::new(move |a, b| {
+                n.set(n.get() + 1);
+                if n.get() == 2 {
+                    Err(std::io::Error::other("injected"))
+                } else {
+                    std::fs::rename(a, b)
+                }
+            }),
+            Box::new(copy_file),
+            Box::new(|| {}),
+        );
+        let e = prep.export_to_with(&items, &dest, &[], false, &hooks).unwrap_err();
+        assert_eq!(e.code, 500, "{}", e.text);
+        assert_eq!(e.written.len(), 1, "{:?}", e.written);
+        assert_eq!(
+            e.not_written,
+            ["t0", "t1", "t2"],
+            "each DAW track once, though five files are left"
+        );
+        assert!(e.text.contains("Not written: t0, t1, t2."), "{}", e.text);
+        assert!(temps_in(&dest).is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// M1c4 round 2 (S2): one export at a time; a second call changes nothing of the first; the same row and kind twice is one file.
     #[test]
     fn a_second_export_is_refused_and_touches_nothing_of_the_first_and_a_double_item_is_one_file() {
@@ -3089,6 +3228,55 @@ mod tests {
                 "t{k} was not replaced"
             );
         }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// #597 (8): the poll of a waiting export is answered from the books of the worker and makes no look at the rows and hits while the books say "preparing"; when
+    /// the sets are ready the full check runs, and a hit that changed since the worker's look is still found by it (the quick answer never lets a copy through).
+    #[test]
+    fn the_poll_of_a_waiting_export_makes_no_look_while_the_books_say_preparing_and_never_hides_a_change() {
+        let _serial = serial();
+        let (svc, sid, root) = many_tracks("quickpoll", 5, 3.5, 5);
+        let prep = prep_many(&svc, &sid, &root, 5, 3.5);
+        prep.cycle(true, true);
+        prep.lock().used = [true, false];
+        prep.cycle(true, false); // the spike sets are wanted and not made
+        let dest = root.join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        let spikes: Vec<Value> = (0..5).map(|k| it(&format!("q{k}"), "spike")).collect();
+        let before = prep.looks.load(std::sync::atomic::Ordering::SeqCst);
+        for _ in 0..10 {
+            let e = prep.export_to(&spikes, &dest, &[], false).unwrap_err();
+            assert_eq!(
+                (e.code, e.text.as_str()),
+                (409, "t0: preparing"),
+                "the first track that is not ready, by its DAW name"
+            );
+        }
+        assert_eq!(
+            prep.looks.load(std::sync::atomic::Ordering::SeqCst),
+            before,
+            "ten polls, no look at the rows and hits"
+        );
+        // a set that is off (not used yet) or failed is not answered from the books: the full check starts it or says why
+        prep.lock().used = [false, false];
+        let e = prep.export_to(&spikes, &dest, &[], false).unwrap_err();
+        assert!(
+            e.text.contains("not prepared yet"),
+            "an unused kind goes the full way: {}",
+            e.text
+        );
+        assert!(prep.looks.load(std::sync::atomic::Ordering::SeqCst) > before);
+        // everything ready: the export goes through the full check and writes
+        prep.lock().used = [true, false];
+        prep.cycle(true, true);
+        let got = prep.export_to(&spikes, &dest, &[], false).unwrap();
+        assert_eq!(got["spikes"], 5);
+        // a hit that changed after the worker's last look: the quick answer is not given, the full check finds the change and writes nothing new
+        svc.events_set(&sid, "t0", &json!([{"t": 0.5, "v": 100}, {"t": 2.0, "v": 100}]))
+            .unwrap();
+        let e = prep.export_to(&spikes, &dest, &[], false).unwrap_err();
+        assert_eq!((e.code, e.text.as_str()), (409, "t0: preparing"), "{}", e.text);
         let _ = std::fs::remove_dir_all(&root);
     }
 
