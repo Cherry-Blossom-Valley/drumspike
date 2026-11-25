@@ -8529,10 +8529,23 @@ def host_rows(label: str, event: str) -> list:
     return out
 
 
-def deliver_close_run(label: str, env: dict | None = None) -> dict:
-    """#599: the run `close` (two editor cycles, no drag, no press in the second): the host watches the prepared folder on the disk, see the mode `deliver` of the host."""
-    rc, summary, rows = editor_run(f"deliver-{label}", "deliver", CLAP, 2, env or {}, DELIVER_ARGS + ["--arg", "close"], timeout=300)
+def deliver_close_run(label: str, env: dict | None = None, arg: str = "close", grace_ms: str = "800") -> dict:
+    """#599: the run `close` (two editor cycles, no drag, no press in the second): the host watches the prepared folder on the disk, see the mode `deliver` of the host.
+    The grace period is shortened (DS_ARA_PREPARE_GRACE_MS); with `close-quick` the second editor opens inside a long period (5 s) after a pause of 600 ms."""
+    e = {"DS_ARA_PREPARE_GRACE_MS": grace_ms}
+    e.update(env or {})
+    rc, summary, rows = editor_run(f"deliver-{label}", "deliver", CLAP, 2, e, DELIVER_ARGS + ["--arg", arg], timeout=300)
     return {"rc": rc, "rows": rows, "watch": {w.get("phase"): w for w in host_rows(f"deliver-{label}", "prepared_watch")}}
+
+
+def deliver_grace_parts(d: dict) -> dict:
+    """#599 round 2 (M1): the editor closes and opens again 600 ms later, inside the grace period: no set is removed and none is rewritten (the same files, the same times)."""
+    w, rows = d["watch"], d["rows"]
+    o, b = w.get("open", {}), w.get("reopened", {})
+    released = [r for r in rows if r.get("event") == "prepare_released" and r.get("why") == "closed"]
+    return {"deliver-grace-kept": (d["rc"] == 0 and bool(o) and bool(b) and o.get("wav") == 4 and b.get("wav") == 4 and o.get("sig") == b.get("sig") and o.get("sig") not in (None, 0) and not released,
+                                   f"closed and opened again inside the period: {o.get('wav')} wav sets before, {b.get('wav')} after, the files are the same (signature {o.get('sig')} -> {b.get('sig')}), "
+                                   f"{len(released)} removals (want 0)")}
 
 
 def deliver_close_parts(d: dict) -> dict:
@@ -8762,6 +8775,7 @@ def stage_deliver() -> bool:
     ok = print_parts("", deliver_names_parts(deliver_run("names", None, ["--seq-names", "Snare", "Snare_audio", "--seq-of", "0", "0", "1", "0", "--regions-all", "0,1.5,0", "--regions-step", "2", "--arg", "noedit"]))) and ok
     ok = print_parts("", deliver_watchdog_parts(deliver_run("watchdog", {"DS_ARA_PREPARE_FAULT": "forever", "DS_ARA_PREPARE_WAIT_MS": "3000"}, DELIVER_ARGS + ["--arg", "short"]))) and ok
     ok = print_parts("", deliver_close_parts(deliver_close_run("close"))) and ok
+    ok = print_parts("", deliver_grace_parts(deliver_close_run("grace", arg="close-quick", grace_ms="5000"))) and ok
     return print_parts("", deliver_hostile_parts(deliver_run("hostile", None, ["--seq-names", "../evil", "/abs", "--seq-of", "0", "0", "1", "0", "--regions-all", "0,1.5,0", "--regions-step", "2", "--arg", "short"]))) and ok
 
 
@@ -8785,6 +8799,8 @@ def stage_deliver_fault() -> bool:
     ok = fault_part("deliver-fault-no-watchdog", deliver_watchdog_parts(d), "deliver-watchdog", "a job that never ends and no watchdog: the handle stays preparing") and ok
     d = deliver_close_run("fault-no-release", {"DS_ARA_PREPARE_FAULT": "no-release"})
     ok = fault_part("deliver-fault-no-release", deliver_close_parts(d), "deliver-close-gone", "the last editor closes and the audio sets stay on the disk") and ok
+    d = deliver_close_run("fault-no-grace", {"DS_ARA_PREPARE_FAULT": "no-grace"}, arg="close-quick", grace_ms="5000")
+    ok = fault_part("deliver-fault-no-grace", deliver_grace_parts(d), "deliver-grace-kept", "the sets are removed at once at the close: an editor that opens again 600 ms later finds them rewritten") and ok
     d = deliver_close_run("fault-no-reopen", {"DS_ARA_PREPARE_FAULT": "no-reopen"})
     ok = fault_part("deliver-fault-no-reopen", deliver_close_parts(d), "deliver-close-back", "the editor opens again and the audio sets are not made again (the handles would stay preparing)") and ok
     d = deliver_run("fault-raw-name", {"DS_ARA_PREPARE_FAULT": "raw-name"}, ["--seq-names", "../evil", "/abs", "--seq-of", "0", "0", "1", "0", "--regions-all", "0,1.5,0", "--regions-step", "2", "--arg", "short"])

@@ -301,3 +301,17 @@ Decisions of the coordinator, option 1 of the proposal above.
   is posted only while the unload has not begun. For all other commands (they answer in milliseconds) the window between the post and the run of the closure on the main thread is the
   limit. A way to close it for good (not built: it changes the life of the library) is to keep the library mapped (`RTLD_NODELETE`), which is a decision of the owner.
 - A unit test of "Retry all" for a track that cannot start for a real reason (the old round still runs): both rows show the refusal with its reason.
+
+### Round 4, round 2 (review of deea184)
+
+- Grace period (M1). The removal does not run at the close. It runs when no editor was open for 60 s (`GRACE`; the scenario `DS_ARA_PREPARE_GRACE_MS` shortens it in a gate build). An open inside the period cancels it with no file touched and no state changed: the
+  handles stay ready, nothing is made again. At the unload and at the teardown of the document the removal runs at once. Unit tests with injected time (close and open after 100 ms, 1 s, 10 s: same files, same times, no job; close and
+  61 s: removed); stage run `close-quick` (the editor opens again after 600 ms inside a 5 s period: the same files); fault run `no-grace` fails it.
+- The count and the flags live in one place (`Prep`, under one lock). An editor that was shown before the document was known is counted at the bind (`Plugin.shown`). A press on a handle, a take and an export with `start` prove an editor: they cancel a release
+  that the count missed and start the grace period again from now when no editor is counted.
+- The hold of `take` has a test (`slow-take` makes the window; fault run `no-hold` loses the file). The unload waits for a hold at most 1.5 s and removes for at most 1 s, so the worker ends inside the 4 s of `stop_all`; what a hold or the deadline
+  leaves is removed by `clean_prepared` at the next open of that project.
+- Teardown: when the preparation is freed (the last plugin instance of the document is destroyed, perhaps inside a tick of the worker) the audio sets of the books are removed by their exact paths on the calling thread (see the measure in the report of #599).
+- A changed prepared folder (the project moved): the audio sets of the OLD folder are removed first, by the exact paths of the books, with the same checks against the old folder. MIDI files there stay. In the plugin the project folder of a document is fixed
+  (`documents/<id>/project`), so this is a guard that should not fire; it has a unit test.
+- Links: the tests prove a link IN PLACE OF a set file (it stays, its target is untouched). A set folder that is itself a link is not a case: the plugin removes by the exact path of a file and never lists or enters a folder.

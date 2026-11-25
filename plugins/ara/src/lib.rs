@@ -646,8 +646,6 @@ struct DocShared {
     auto_retry: AtomicU64,
     /// M1c3 (#576): the preparation of the files that leave the plugin (made on first use, by `prep()`).
     prep: std::sync::OnceLock<Arc<prepare::Prep>>,
-    /// #599: how many editors of this document are open (a plugin instance counts once, from `gui.set_parent` to `gui.destroy`).
-    editors: AtomicU64,
 }
 
 /// The regions and the rate to map the notes of a source with: those of the last round when
@@ -775,7 +773,6 @@ impl DocShared {
             states_last: Mutex::new(None),
             auto_retry: AtomicU64::new(0),
             prep: std::sync::OnceLock::new(),
-            editors: AtomicU64::new(0),
             canceller: svc.canceller(),
             id: Mutex::new(id),
             svc: Mutex::new(svc),
@@ -1672,29 +1669,16 @@ impl DocShared {
             .clone()
     }
 
-    /// #599: an editor of this document opened. The first one lets the preparation make the audio sets again (when they were in use before).
+    /// #599: an editor of this document opened (the count lives in the preparation, under its lock). It cancels a grace period or brings the audio sets back.
     fn editor_opened(self: &Arc<Self>) {
-        if self.editors.fetch_add(1, Ordering::SeqCst) == 0 {
-            self.prep().editors_opened();
-        }
+        self.prep().editors_opened();
     }
 
-    /// #599: an editor of this document closed. The last one lets the worker of the preparation remove the audio sets (the close does no file work).
+    /// #599: an editor of this document closed. The last one starts the grace period after which the worker removes the audio sets (the close does no file
+    /// work). A document that never made a preparation has nothing to remove: none is made here.
     fn editor_closed(self: &Arc<Self>) {
-        let mut n = self.editors.load(Ordering::SeqCst);
-        while n > 0 {
-            match self
-                .editors
-                .compare_exchange(n, n - 1, Ordering::SeqCst, Ordering::SeqCst)
-            {
-                Ok(_) => {
-                    if n == 1 {
-                        self.prep().editors_closed();
-                    }
-                    return;
-                }
-                Err(now) => n = now,
-            }
+        if let Some(p) = self.prep.get() {
+            p.editors_closed();
         }
     }
 
@@ -5776,11 +5760,22 @@ struct Plugin {
     gui_size: std::sync::atomic::AtomicU64,
     /// #599: the document this instance counts as an open editor of (set at `gui.set_parent`, taken at `gui.destroy` and when the instance goes).
     attached: Mutex<Option<Arc<DocShared>>>,
+    /// #599: the editor of this instance is in a window (set at `gui.set_parent`, cleared at `gui.destroy`), even when the document was not known yet: the bind counts it.
+    shown: AtomicBool,
 }
 
 impl Plugin {
     /// The editor of this instance is shown in a window: it counts for its document (once).
     pub(crate) fn note_attached(&self) {
+        self.shown.store(true, Ordering::SeqCst);
+        self.count_editor();
+    }
+
+    /// Counts this instance's editor for its document once, when both the window and the document are known (the bind can come after the window).
+    pub(crate) fn count_editor(&self) {
+        if !self.shown.load(Ordering::SeqCst) {
+            return;
+        }
         let doc = self.doc.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let Some(doc) = doc else { return };
         let mut a = self.attached.lock().unwrap_or_else(|e| e.into_inner());
@@ -5793,6 +5788,7 @@ impl Plugin {
 
     /// The window of this instance's editor closed (or the instance goes): it no longer counts.
     pub(crate) fn note_detached(&self) {
+        self.shown.store(false, Ordering::SeqCst);
         let doc = self.attached.lock().unwrap_or_else(|e| e.into_inner()).take();
         if let Some(doc) = doc {
             doc.editor_closed();
@@ -5813,6 +5809,7 @@ unsafe extern "C" fn pext_bind(
         let plugin = (*p).plugin_data as *mut Plugin;
         if !dc.is_null() {
             *(*plugin).doc.lock().unwrap_or_else(|e| e.into_inner()) = Some(controller_of(dc).doc.clone());
+            (*plugin).count_editor(); // #599: a window that was shown before the document was known counts now
         }
         let me = plugin as *mut c_void;
         let has = |role: u32| assigned & role as i32 != 0;
@@ -6512,6 +6509,7 @@ unsafe extern "C" fn f_create(
             host_name: host_name_of(host),
             gui_size: std::sync::atomic::AtomicU64::new((1000u64 << 32) | 640),
             attached: Mutex::new(None),
+            shown: AtomicBool::new(false),
         }));
         (*p).clap.plugin_data = p as *mut c_void;
         &(*p).clap
@@ -7132,6 +7130,28 @@ mod tests {
         // a second press at once is still refused for both rows
         let again = doc.retry_rows(&["q7".to_string(), "q9".to_string()]);
         assert_eq!(again["started"], json!([]), "{again}");
+    }
+
+    /// #599 round 2 (S2): an editor that was shown BEFORE the document was known (the bind comes later) is counted at the bind; its close counts it out once.
+    #[test]
+    fn an_editor_shown_before_the_bind_is_counted_at_the_bind_and_out_at_its_close() {
+        let (doc, _a, _b) = first_open_doc();
+        unsafe {
+            let clap = f_create(std::ptr::null(), std::ptr::null(), PLUGIN_ID);
+            assert!(!clap.is_null());
+            let plugin: &Plugin = &*((*clap).plugin_data as *mut Plugin);
+            plugin.note_attached(); // gui.set_parent: the window is up, the document is not known
+            assert!(doc.prep.get().is_none_or(|p| p.open_editors() == 0), "not counted yet");
+            *plugin.doc.lock().unwrap() = Some(doc.clone()); // the bind
+            plugin.count_editor();
+            plugin.count_editor(); // a second call counts nothing more
+            assert_eq!(doc.prep().open_editors(), 1, "counted at the bind");
+            plugin.note_detached();
+            assert_eq!(doc.prep().open_editors(), 0, "counted out at the close");
+            plugin.note_detached();
+            assert_eq!(doc.prep().open_editors(), 0, "and only once");
+            p_destroy(clap);
+        }
     }
 
     /// #599: "Retry all" with a track on two DAW track rows whose job cannot start for a real reason (the old round of the track still runs): the refusal shows

@@ -603,6 +603,30 @@ fn prepared_counts(dir: &std::path::Path) -> (usize, usize, u64) {
     (wav, mid, bytes)
 }
 
+/// #599 round 2: a hash of the names, sizes and modification times of the files of the prepared folder (a rewrite changes it).
+fn prepared_sig(dir: &std::path::Path) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut v: Vec<(String, u64, u128)> = std::fs::read_dir(dir)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter_map(|e| {
+            let m = e.metadata().ok()?;
+            let t = m
+                .modified()
+                .ok()?
+                .duration_since(std::time::UNIX_EPOCH)
+                .ok()?
+                .as_nanos();
+            Some((e.file_name().to_string_lossy().into_owned(), m.len(), t))
+        })
+        .collect();
+    v.sort();
+    let mut h = std::collections::hash_map::DefaultHasher::new();
+    v.hash(&mut h);
+    h.finish()
+}
+
 fn arg_flag(rest: &[String], name: &str) -> bool {
     rest.iter().any(|a| a == name)
 }
@@ -917,7 +941,9 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
         });
         // #599 (mode deliver, `--arg close`): round 1 is the ordinary driver run; the host then closes the editor, watches the prepared folder until the
         // audio sets are gone, opens the editor again (round 2) and watches until they are back. It prints the rows `prepared_watch`.
-        let close_run = mode == "deliver" && args_value(rest, "--arg").as_deref() == Some("close");
+        let close_arg = args_value(rest, "--arg");
+        let quick = mode == "deliver" && close_arg.as_deref() == Some("close-quick"); // the editor opens again inside the grace period
+        let close_run = mode == "deliver" && (close_arg.as_deref() == Some("close") || quick);
         let mut watch_before: (usize, usize, u64) = (0, 0, 0);
         for round in 1..=cycles {
             if !((*gui).create.expect("create"))(plugin, cocoa.as_ptr(), false) {
@@ -1020,13 +1046,16 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                     while t.elapsed() < Duration::from_secs(15) {
                         pump(&app);
                         now = dir.as_deref().map_or((0, 0, 0), prepared_counts);
-                        if now.0 >= watch_before.0 && now.0 > 0 {
+                        if quick && t.elapsed() >= Duration::from_millis(1500) {
+                            break; // the sets were never removed: look again after a while, they must be the same files
+                        }
+                        if !quick && now.0 >= watch_before.0 && now.0 > 0 {
                             break;
                         }
                     }
                     println!(
-                        "{{\"event\":\"prepared_watch\",\"phase\":\"reopened\",\"wav\":{},\"mid\":{},\"bytes\":{},\"want_wav\":{},\"ms\":{}}}",
-                        now.0, now.1, now.2, watch_before.0, t.elapsed().as_millis()
+                        "{{\"event\":\"prepared_watch\",\"phase\":\"reopened\",\"wav\":{},\"mid\":{},\"bytes\":{},\"want_wav\":{},\"ms\":{},\"sig\":{}}}",
+                        now.0, now.1, now.2, watch_before.0, t.elapsed().as_millis(), dir.as_deref().map_or(0, prepared_sig)
                     );
                     got = true;
                     break;
@@ -1480,15 +1509,22 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                     })
                     .unwrap_or_default();
                 println!(
-                    "{{\"event\":\"prepared_watch\",\"phase\":\"open\",\"wav\":{},\"mid\":{},\"bytes\":{},\"names\":{}}}",
+                    "{{\"event\":\"prepared_watch\",\"phase\":\"open\",\"wav\":{},\"mid\":{},\"bytes\":{},\"names\":{},\"sig\":{}}}",
                     watch_before.0,
                     watch_before.1,
                     watch_before.2,
-                    serde_json::to_string(&names).unwrap_or_else(|_| "[]".into())
+                    serde_json::to_string(&names).unwrap_or_else(|_| "[]".into()),
+                    watch_dir.as_deref().map_or(0, prepared_sig)
                 );
             }
             ((*gui).destroy.expect("gui.destroy"))(plugin);
-            if close_run && round == 1 && got {
+            if quick && round == 1 && got {
+                // inside the grace period: the editor opens again after a pause that is longer than a tick of the worker and much shorter than the period
+                let t = Instant::now();
+                while t.elapsed() < Duration::from_millis(600) {
+                    pump(&app);
+                }
+            } else if close_run && round == 1 && got {
                 // the editor is closed: the worker removes the audio sets by itself; the host only looks at the disk
                 let t = Instant::now();
                 let mut now = watch_before;

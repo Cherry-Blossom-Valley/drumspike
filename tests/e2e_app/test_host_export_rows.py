@@ -108,6 +108,45 @@ def test_a_press_of_export_while_the_plan_call_is_in_flight_waits_for_it_and_sho
     assert calls(host, "press")[0][1] == "7 files will be replaced", "the count on the screen when the files are written is the new one"
 
 
+def test_a_plan_call_that_fails_while_export_waits_for_it_leaves_export_working(host):
+    """#599 round 2 (N9): the waited plan call throws (here its render): no unhandled rejection, Export goes on and `busy` is cleared at the end."""
+    give(host, payload(spike=S_READY, audio=S_READY, used={"spike": True, "audio": True}))
+    open_dialog(host)
+    host.wait_for_function("() => window.__calls.some(c => c[0] === 'plan') && document.querySelector('#exReplace').textContent === '2 files will be replaced'")
+    host.evaluate("""() => { EX.tempoAck = true; window.__calls = []; window.__rej = [];
+      window.addEventListener('unhandledrejection', e => window.__rej.push(String(e.reason)));
+      const render = window.exRender; let armed = 0;
+      B.deliverPlan = async (items, dest) => { window.__calls.push(['plan']); await new Promise(r => setTimeout(r, 300)); armed = 2; return { files: [], replace: 7, dest }; };   // the render after the answer fails twice: once inside the call, once after its own catch
+      window.exRender = function () { if (armed > 0) { armed--; if (!armed) window.exRender = render; throw new Error('render failed'); } return render.apply(this, arguments); };
+      document.querySelector('#exSpikeBoth').click(); }""")
+    host.wait_for_function("() => window.__calls.some(c => c[0] === 'plan')")   # in flight
+    host.evaluate("() => { document.querySelector('#exGo').click(); }")
+    host.wait_for_function("() => EX.done > 0", timeout=10000)
+    host.wait_for_function("() => !EX.busy")
+    host.wait_for_timeout(300)
+    assert host.evaluate("() => window.__rej") == [], "a failed plan call is no unhandled rejection"
+    assert len(calls(host, "export")) == 1, "Export ran"
+    assert "replace count failed" in host.locator("#stMsg").inner_text() or host.evaluate("() => EX.done") > 0
+
+
+def test_a_newer_plan_call_that_starts_while_export_waits_is_waited_for_too(host):
+    """#599 round 2 (N9): a second option change during the wait starts a newer plan call; Export waits until none is left."""
+    give(host, payload(spike=S_READY, audio=S_READY, used={"spike": True, "audio": True}))
+    open_dialog(host)
+    host.wait_for_function("() => window.__calls.some(c => c[0] === 'plan') && document.querySelector('#exReplace').textContent === '2 files will be replaced'")
+    host.evaluate("""() => { EX.tempoAck = true; window.__calls = []; let n = 0;
+      B.deliverPlan = async (items, dest) => { const k = ++n; window.__calls.push(['plan', k]); await new Promise(r => setTimeout(r, 300)); window.__calls.push(['planned', k]); return { files: [], replace: 10 + k, dest }; };
+      const o = B.deliverExport;
+      B.deliverExport = async (items, dest, start) => { window.__calls.push(['press', document.querySelector('#exReplace').textContent]); return o(items, dest, start); };
+      document.querySelector('#exSpikeBoth').click(); }""")
+    host.wait_for_function("() => window.__calls.some(c => c[0] === 'plan')")
+    host.evaluate("() => { document.querySelector('#exGo').click(); setTimeout(() => { document.querySelector('#exAudio') && document.querySelector('#exAudio').click(); exChanged(); }, 100); }")
+    host.wait_for_function("() => EX.done > 0", timeout=10000)
+    seen = host.evaluate("() => window.__calls.map(c => c[0])")
+    i = seen.index("press")
+    assert seen[:i].count("plan") == seen[:i].count("planned") >= 2, f"every plan call was answered before Export ran: {seen}"
+
+
 def test_the_spike_types_the_single_file_and_the_selected_track(host):
     give(host, payload(spike=S_READY, audio=S_READY, used={"spike": True, "audio": True}))
     open_dialog(host)
