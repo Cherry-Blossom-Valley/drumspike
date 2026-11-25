@@ -3092,6 +3092,50 @@ mod tests {
         let _ = std::fs::remove_dir_all(&root);
     }
 
+    /// #593: the gate entry "*" (the state path failed: every row counts as preparing) closes every handle and the export of the dialog, and it opens again when the
+    /// entry goes. The test of the plugin side (`a_panic_in_the_gate_fails_closed...`) proves the entry is made; this one proves what the producer does with it.
+    #[test]
+    fn the_all_rows_entry_of_the_gate_closes_every_handle_and_the_export_and_opens_them_again() {
+        let _serial = serial();
+        let (_svc, _sid, root, prep, dest, items) = five_rows("gate-all");
+        let ready = |prep: &Arc<Prep>| -> Vec<String> {
+            let v = prep.state_json();
+            let mut s: Vec<String> = v["rows"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|r| r["midi"]["state"].as_str().unwrap().to_string())
+                .collect();
+            s.push(v["merged"]["state"].as_str().unwrap().to_string());
+            s
+        };
+        assert!(ready(&prep).iter().all(|s| s == "ready"), "{:?}", ready(&prep));
+        prep.set_gate(Arc::new(|| vec![("*".to_string(), true)]));
+        assert!(
+            ready(&prep).iter().all(|s| s == "preparing"),
+            "every row and the merged file: {:?}",
+            ready(&prep)
+        );
+        let e = prep.export_to(&items, &dest, &[], false).unwrap_err();
+        assert_eq!(e.code, 409);
+        assert!(e.text.starts_with("preparing"), "{}", e.text);
+        assert!(
+            prep.take(&[("q0".to_string(), Kind::Midi)]).is_err(),
+            "a take of one row is refused as well"
+        );
+        assert!(
+            std::fs::read_dir(&dest)
+                .unwrap()
+                .flatten()
+                .all(|f| std::fs::read(f.path()).unwrap() == b"OLD"),
+            "nothing was written"
+        );
+        prep.set_gate(Arc::new(Vec::new));
+        assert!(ready(&prep).iter().all(|s| s == "ready"), "{:?}", ready(&prep));
+        assert!(prep.export_to(&items, &dest, &[], false).is_ok(), "open again");
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
     /// #597: a stop that comes between the last copy and the first rename (the last checkpoint) writes nothing either.
     #[test]
     fn a_stop_after_the_last_copy_replaces_no_file() {
