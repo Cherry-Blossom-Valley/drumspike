@@ -667,6 +667,14 @@ struct St {
     wake_seq: u64,
     clean_seq: u64,
     pushed_seq: u64,
+    /// #599: no editor of the document is open: the prepared AUDIO sets (spike, audio spike) are removed and not made again until an editor opens.
+    released: bool,
+    /// #599: the folder of the prepared files as the last pass saw it (the removal works only inside it).
+    prepared_dir: Option<PathBuf>,
+    /// #599: an editor opened after a removal: when, and how many wav sets the removal took (the row `prepare_reopened` says when they are ready again).
+    reopen: Option<(Instant, usize)>,
+    /// #599: how many audio sets the last removal took.
+    removed_wav: usize,
 }
 
 pub type FilesFn = Arc<dyn Fn() -> HashMap<String, (PathBuf, u32)> + Send + Sync>;
@@ -689,6 +697,25 @@ pub struct Prep {
     exp: ExportProgress,
     /// How many full looks at the rows and the hits were made (`gather`); the poll of a waiting export must not make one (#597).
     looks: std::sync::atomic::AtomicU64,
+    /// #599: how many takes and exports hold prepared sets now. A removal of the audio sets never runs while one does (and a take or an export that
+    /// starts after the removal found the sets gone from the books and waits for the new ones).
+    holds: std::sync::atomic::AtomicUsize,
+}
+
+/// One take or export that holds the prepared sets until it ends, however it ends (#599).
+struct HoldGuard<'a>(&'a std::sync::atomic::AtomicUsize);
+
+impl<'a> HoldGuard<'a> {
+    fn new(c: &'a std::sync::atomic::AtomicUsize) -> Self {
+        c.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        HoldGuard(c)
+    }
+}
+
+impl Drop for HoldGuard<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
 }
 
 /// One file of a planned export: `(row id, kind, file name, DAW track)`.
@@ -874,6 +901,7 @@ impl Prep {
             gate: Mutex::new(None),
             exp: ExportProgress::default(),
             looks: std::sync::atomic::AtomicU64::new(0),
+            holds: std::sync::atomic::AtomicUsize::new(0),
         })
     }
 
@@ -1231,6 +1259,7 @@ impl Prep {
     ///
     /// `(status, text)`: 409 with the state of the first item that is not ready, 413 over the bound of a drag, 500 when a link fails.
     pub fn take(self: &Arc<Self>, items: &[(String, Kind)]) -> Result<Vec<PathBuf>, (u16, String)> {
+        let _hold = HoldGuard::new(&self.holds);
         let Some(g) = self.gather(true) else {
             return Err((503, "the document is closed".into()));
         };
@@ -1441,8 +1470,9 @@ impl Prep {
             return Err((409, "an export is running".to_string()).into());
         }
         let _running = BusyGuard(&self.exp.running);
-        // #597 (8): the poll of a waiting dialog (not the first call) answers "preparing" from the books of the worker when they say so: a full look at 40 rows
-        // costs about 30 ms (measured), three times a second
+        let _hold = HoldGuard::new(&self.holds); // #599: no removal of the audio sets while this call can read them
+                                                 // #597 (8): the poll of a waiting dialog (not the first call) answers "preparing" from the books of the worker when they say so: a full look at 40 rows
+                                                 // costs about 30 ms (measured), three times a second
         if !start {
             if let Some(why) = self.quick_preparing(items) {
                 return Err((409, why).into());
@@ -1708,6 +1738,7 @@ impl Prep {
         {
             let mut st = self.lock();
             st.no_folder = false;
+            st.prepared_dir = Some(prepared.clone());
             st.cycles += 1;
             st.clean_seq = seen;
             st.meta = g
@@ -1746,7 +1777,9 @@ impl Prep {
             let need = {
                 let st = self.lock();
                 let fp = fps[&key];
-                !st.ready.get(&key).is_some_and(|r| r.fp == fp)
+                // #599: no editor is open: the audio sets are not made again (the next open makes them)
+                !(key.1.is_wav() && st.released)
+                    && !st.ready.get(&key).is_some_and(|r| r.fp == fp)
                     && !st.failed.get(&key).is_some_and(|f| failed_blocks(f, fp))
             };
             if !due || !need {
@@ -1757,7 +1790,134 @@ impl Prep {
             }
             self.job(&g, &key, fps[&key], &exports, &prepared);
         }
+        self.note_reopened();
         self.push();
+    }
+
+    /// #599: the last editor of the document closed. The prepared AUDIO sets (spike, audio spike) are removed by the worker (never on this thread:
+    /// the close of an editor does no file work) and are not made again until an editor opens. MIDI sets stay. The fault run `no-release` does nothing.
+    pub fn editors_closed(self: &Arc<Self>) {
+        if has("no-release") {
+            return;
+        }
+        self.lock().released = true;
+        self.wake_worker_only();
+    }
+
+    /// #599: an editor of the document opened. When the audio sets were removed, the kinds that were in use are made again by themselves (no press; `used`
+    /// stayed), at once, with no quiet time. The fault run `no-reopen` keeps the document released (the sets never come back).
+    pub fn editors_opened(self: &Arc<Self>) {
+        if has("no-reopen") {
+            return;
+        }
+        let was = {
+            let mut st = self.lock();
+            let was = std::mem::replace(&mut st.released, false);
+            if was {
+                // the time since the removal is no wait of the watchdog: it counts from now
+                let now = Instant::now();
+                st.reopen = (st.removed_wav > 0).then_some((now, st.removed_wav));
+                for t in st.pending_since.values_mut() {
+                    *t = now;
+                }
+            }
+            was
+        };
+        if was {
+            self.wake();
+            self.kick();
+        }
+    }
+
+    /// The worker looks at the books at its next tick; nothing else changes (no quiet time is started).
+    fn wake_worker_only(self: &Arc<Self>) {
+        if self.lock().started {
+            self.cv.notify_all();
+        }
+    }
+
+    /// #599: remove the prepared AUDIO sets that the books hold: the exact files of the plugin's own sets inside its own `.prepared/` folder, nothing
+    /// else (no pattern, no recursion, no link followed). Never while a take or an export holds the sets (then it tries again at the next tick of the
+    /// worker). The sets leave the books FIRST, under the lock, so no handle says "ready" for a file that is going and a take or export that starts now
+    /// finds the set missing and waits for the new one. `unload`: the library is about to leave; the stop sign is set, so no job runs. A failed removal is
+    /// logged and harmless (the next pass of the worker removes every file that no ready set holds).
+    fn release_sets(self: &Arc<Self>, unload: bool) {
+        let t0 = Instant::now();
+        let (dir, taken) = {
+            let mut st = self.lock();
+            if !(st.released || unload) || self.holds.load(std::sync::atomic::Ordering::SeqCst) != 0 {
+                return;
+            }
+            let Some(dir) = st.prepared_dir.clone() else { return };
+            let keys: Vec<Key> = st.ready.keys().filter(|k| k.1.is_wav()).cloned().collect();
+            if keys.is_empty() {
+                return;
+            }
+            let mut taken: Vec<PathBuf> = Vec::new();
+            for k in keys {
+                if let Some(r) = st.ready.remove(&k) {
+                    taken.extend(r.prepared);
+                }
+            }
+            (dir, taken)
+        };
+        let (mut removed, mut bytes, mut failed) = (0usize, 0u64, 0usize);
+        for p in &taken {
+            // exact name, inside the folder, a regular file (a link is never followed: `remove_file` removes the link itself, and a link is not counted as ours)
+            let Ok(m) = std::fs::symlink_metadata(p) else { continue };
+            if p.parent() != Some(dir.as_path()) || !m.is_file() {
+                failed += 1;
+                continue;
+            }
+            match std::fs::remove_file(p) {
+                Ok(()) => {
+                    removed += 1;
+                    bytes += m.len();
+                }
+                Err(e) => {
+                    failed += 1;
+                    crate::session()
+                        .log(json!({"event": "prepare_release_failed", "error": e.to_string()}).to_string());
+                }
+            }
+        }
+        {
+            let mut st = self.lock();
+            st.reopen = None;
+            if !unload {
+                st.removed_wav = removed;
+            }
+        }
+        crate::session().log(
+            json!({"event": "prepare_released", "why": if unload { "unload" } else { "closed" }, "removed": removed, "bytes": bytes,
+                "failed": failed, "ms": t0.elapsed().as_millis() as u64, "unix_ns": crate::now_ns().to_string()})
+            .to_string(),
+        );
+        if !unload {
+            self.push();
+        }
+    }
+
+    /// #599: after an open that brought the audio sets back: when every wanted audio set is ready again, one row says how long it took.
+    fn note_reopened(&self) {
+        let (since, n) = {
+            let st = self.lock();
+            let Some((since, n)) = st.reopen else { return };
+            let all = st
+                .want
+                .iter()
+                .filter(|(k, _)| k.1.is_wav())
+                .all(|(k, fp)| st.ready.get(k).is_some_and(|r| r.fp == *fp));
+            if !all || st.released {
+                return;
+            }
+            (since, n)
+        };
+        self.lock().reopen = None;
+        crate::session().log(
+            json!({"event": "prepare_reopened", "sets": n, "ms": since.elapsed().as_millis() as u64, "unix_ns": crate::now_ns().to_string()})
+                .to_string(),
+        );
     }
 
     fn job(self: &Arc<Self>, g: &Gathered, key: &Key, fp: u64, exports: &Path, prepared: &Path) {
@@ -2132,6 +2292,14 @@ fn worker(weak: &Weak<Prep>) {
     loop {
         std::thread::sleep(Duration::from_millis(150));
         if stopped() {
+            // #599: the library is about to leave: the audio sets go too (after a running export or take let them go: it stops at its next checkpoint)
+            if let Some(p) = weak.upgrade() {
+                let t0 = Instant::now();
+                while p.holds.load(std::sync::atomic::Ordering::SeqCst) != 0 && t0.elapsed() < Duration::from_secs(3) {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                p.release_sets(true);
+            }
             return;
         }
         let Some(p) = weak.upgrade() else { return };
@@ -2161,6 +2329,9 @@ fn worker(weak: &Weak<Prep>) {
         };
         if need_push {
             p.push();
+        }
+        if p.lock().released {
+            p.release_sets(false);
         }
         let (midi, wav) = {
             let st = p.lock();
@@ -4222,5 +4393,329 @@ mod tests {
             "the tempo track and one note track"
         );
         let _ = std::fs::remove_dir_all(&d);
+    }
+
+    // ------------------------------------------------------------ #599: the disk space of the prepared audio sets
+
+    fn prepared_names(prep: &Arc<Prep>) -> Vec<String> {
+        let dir = prep.exports_dir().unwrap().join(PREPARED_DIR);
+        let mut v: Vec<String> = std::fs::read_dir(dir)
+            .unwrap()
+            .flatten()
+            .map(|e| e.file_name().to_string_lossy().into_owned())
+            .collect();
+        v.sort();
+        v
+    }
+
+    fn handle_states(prep: &Arc<Prep>) -> Vec<(String, String, String)> {
+        prep.state_json()["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| {
+                (
+                    r["midi"]["state"].as_str().unwrap().to_string(),
+                    r["spike"]["state"].as_str().unwrap().to_string(),
+                    r["audio"]["state"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect()
+    }
+
+    /// Two tracks, both wav kinds in use and every set made; no worker thread (the test makes each pass itself).
+    fn prepared_with_wavs(tag: &str) -> (PathBuf, Arc<Prep>) {
+        let (svc, sid, root) = two_tracks(tag);
+        svc.events_set(&sid, "lead", &json!([{"t": 0.25, "v": 100}, {"t": 1.25, "v": 100}]))
+            .unwrap();
+        svc.events_set(&sid, "sub", &json!([{"t": 0.5, "v": 100}])).unwrap();
+        let prep = prep_of(&svc, &sid, &root);
+        prep.lock().started = true;
+        prep.lock().used = [true, true];
+        prep.cycle(true, true);
+        (root, prep)
+    }
+
+    /// #599 (D1): the last editor closes: the audio sets leave `.prepared/` (and the books), the MIDI sets and the merged file stay, no handle says ready for a file
+    /// that is gone, nothing makes them again while no editor is open, and the next open makes them again by itself (no press: the kinds stay in use).
+    #[test]
+    fn the_audio_sets_go_when_the_last_editor_closes_and_come_back_at_the_next_open() {
+        let _serial = serial();
+        let (root, prep) = prepared_with_wavs("release");
+        let all = prepared_names(&prep);
+        assert_eq!(all.len(), 7, "2 MIDI, 2 spike, 2 audio and the merged file: {all:?}");
+        assert!(handle_states(&prep)
+            .iter()
+            .all(|s| *s == ("ready".into(), "ready".into(), "ready".into())));
+        // a drag holds a link in Dragged/: it is not touched at all
+        let took = prep
+            .take(&[("q-lead".to_string(), Kind::Spike), ("q-lead".to_string(), Kind::Midi)])
+            .unwrap();
+        let dragged_bytes: Vec<Vec<u8>> = took.iter().map(|p| std::fs::read(p).unwrap()).collect();
+        prep.editors_closed();
+        prep.release_sets(false);
+        let left = prepared_names(&prep);
+        assert_eq!(left.len(), 3, "the MIDI sets and the merged file stay: {left:?}");
+        assert!(left.iter().all(|n| !n.ends_with(".wav")), "{left:?}");
+        let states = handle_states(&prep);
+        assert!(
+            states
+                .iter()
+                .all(|s| s.0 == "ready" && s.1 == "preparing" && s.2 == "preparing"),
+            "a handle never says ready for a file that is gone, and says preparing, not an error: {states:?}"
+        );
+        assert_eq!(
+            prep.take(&[("q-lead".to_string(), Kind::Spike)]).unwrap_err().0,
+            409,
+            "a take of a removed set waits for the new one"
+        );
+        assert_eq!(
+            took.iter().map(|p| std::fs::read(p).unwrap()).collect::<Vec<_>>(),
+            dragged_bytes,
+            "the files of Dragged/ keep their bytes"
+        );
+        // no editor is open: a pass (a wake of the worker) does not make the sets again
+        prep.cycle(true, true);
+        assert_eq!(prepared_names(&prep), left, "the closed document makes no audio set");
+        // the next open: the kinds were in use, so the handles get ready again with no press
+        prep.editors_opened();
+        assert!(prep.lock().used == [true, true], "used stays remembered");
+        prep.cycle(true, true);
+        assert_eq!(prepared_names(&prep), all, "the same 7 files are back");
+        assert!(handle_states(&prep)
+            .iter()
+            .all(|s| *s == ("ready".into(), "ready".into(), "ready".into())));
+        assert!(prep.take(&[("q-lead".to_string(), Kind::Spike)]).is_ok());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// #599 (D1), the fault runs: `no-release` leaves the sets on the disk, `no-reopen` never makes them again. The same checks of the test above see both.
+    #[test]
+    #[cfg(feature = "test-switches")]
+    fn the_fault_runs_of_the_release_fail_the_checks_for_their_named_reason() {
+        let _serial = serial();
+        let (root, prep) = prepared_with_wavs("release-fault");
+        let _g = FaultGuard::set("no-release");
+        prep.editors_closed();
+        prep.release_sets(false);
+        assert_eq!(
+            prepared_names(&prep).iter().filter(|n| n.ends_with(".wav")).count(),
+            4,
+            "no-release: the audio sets are still there after the close"
+        );
+        drop(_g);
+        let _g = FaultGuard::set("no-reopen");
+        prep.editors_closed();
+        prep.release_sets(false);
+        assert_eq!(prepared_names(&prep).len(), 3);
+        prep.editors_opened();
+        prep.cycle(true, true);
+        assert_eq!(
+            prepared_names(&prep).len(),
+            3,
+            "no-reopen: the audio sets never come back"
+        );
+        assert!(handle_states(&prep).iter().all(|s| s.1 == "preparing"));
+        drop(_g);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Sets the fault `DS_ARA_PREPARE_FAULT` for the test and clears it again (the tests that use it run one after the other: `serial`).
+    #[cfg(feature = "test-switches")]
+    struct FaultGuard;
+    #[cfg(feature = "test-switches")]
+    impl FaultGuard {
+        fn set(f: &str) -> FaultGuard {
+            std::env::set_var("DS_ARA_PREPARE_FAULT", f);
+            FaultGuard
+        }
+    }
+    #[cfg(feature = "test-switches")]
+    impl Drop for FaultGuard {
+        fn drop(&mut self) {
+            std::env::remove_var("DS_ARA_PREPARE_FAULT");
+        }
+    }
+
+    /// #599 (D1): a set that a running export copies is not removed: the removal waits, the export delivers the complete file, and the removal runs after it.
+    /// A take that is in progress holds the sets the same way.
+    #[test]
+    fn a_set_under_a_running_export_or_a_take_is_not_removed() {
+        let _serial = serial();
+        let (root, prep) = prepared_with_wavs("release-export");
+        let spike = prep.exports_dir().unwrap().join(PREPARED_DIR);
+        let want: Vec<u8> = std::fs::read(spike.join("lead_spike.wav")).unwrap();
+        let dest = root.join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        let in_copy = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let go = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let (in2, go2) = (Arc::clone(&in_copy), Arc::clone(&go));
+        let (prep2, dest2) = (Arc::clone(&prep), dest.clone());
+        let runner = std::thread::spawn(move || {
+            let hooks = real_hooks_with(
+                Box::new(|a, b| std::fs::rename(a, b)),
+                Box::new(move |a, b, c| {
+                    in2.store(true, std::sync::atomic::Ordering::SeqCst);
+                    while !go2.load(std::sync::atomic::Ordering::SeqCst) {
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    copy_file(a, b, c)
+                }),
+                Box::new(|| {}),
+            );
+            prep2.export_to_with(&[it("q-lead", "spike")], &dest2, &[], false, &hooks)
+        });
+        let t0 = Instant::now();
+        while !in_copy.load(std::sync::atomic::Ordering::SeqCst) && t0.elapsed() < Duration::from_secs(10) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(in_copy.load(std::sync::atomic::Ordering::SeqCst), "the export copies");
+        prep.editors_closed();
+        prep.release_sets(false);
+        assert_eq!(
+            prepared_names(&prep).iter().filter(|n| n.ends_with(".wav")).count(),
+            4,
+            "nothing of the audio sets is removed while an export holds them"
+        );
+        go.store(true, std::sync::atomic::Ordering::SeqCst);
+        let got = runner.join().unwrap().unwrap();
+        assert_eq!(got["spikes"].as_u64(), Some(1));
+        let delivered: Vec<PathBuf> = std::fs::read_dir(&dest).unwrap().flatten().map(|e| e.path()).collect();
+        assert_eq!(delivered.len(), 1);
+        assert_eq!(
+            std::fs::read(&delivered[0]).unwrap(),
+            want,
+            "the export delivered the complete file"
+        );
+        // the removal comes at the next tick, now that nothing holds the sets
+        prep.release_sets(false);
+        assert_eq!(prepared_names(&prep).iter().filter(|n| n.ends_with(".wav")).count(), 0);
+        // a take holds them as well
+        prep.editors_opened();
+        prep.cycle(true, true);
+        let hold = HoldGuard::new(&prep.holds);
+        prep.editors_closed();
+        prep.release_sets(false);
+        assert_eq!(
+            prepared_names(&prep).iter().filter(|n| n.ends_with(".wav")).count(),
+            4,
+            "held by a take"
+        );
+        drop(hold);
+        prep.release_sets(false);
+        assert_eq!(prepared_names(&prep).iter().filter(|n| n.ends_with(".wav")).count(), 0);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// #599 (D2): the removal names the exact files of the plugin's own sets: a file of another name in `.prepared/`, a folder and a link in place of a set stay;
+    /// a set that is gone already is no error.
+    #[test]
+    fn the_removal_names_exact_files_and_never_follows_a_link_or_removes_another_file() {
+        let _serial = serial();
+        let (root, prep) = prepared_with_wavs("release-exact");
+        let dir = prep.exports_dir().unwrap().join(PREPARED_DIR);
+        let outside = root.join("outside.txt");
+        std::fs::write(&outside, b"KEEP").unwrap();
+        std::fs::write(dir.join("notes.wav"), b"not a set").unwrap(); // a wav that no set holds
+        std::fs::create_dir_all(dir.join("sub.wav")).unwrap();
+        std::fs::write(dir.join("sub.wav").join("inner.wav"), b"inner").unwrap();
+        let lead_spike = dir.join("lead_spike.wav");
+        assert!(lead_spike.is_file(), "{:?}", prepared_names(&prep));
+        std::fs::remove_file(&lead_spike).unwrap();
+        std::os::unix::fs::symlink(&outside, &lead_spike).unwrap(); // a link in place of a set
+        let gone = dir.join("sub_audio_spike.wav");
+        std::fs::remove_file(&gone).unwrap(); // a set that is gone already
+        prep.editors_closed();
+        prep.release_sets(false);
+        assert_eq!(std::fs::read(&outside).unwrap(), b"KEEP", "a link is never followed");
+        assert!(
+            std::fs::symlink_metadata(&lead_spike).is_ok(),
+            "a link is not one of our files: it stays"
+        );
+        assert_eq!(
+            std::fs::read(dir.join("notes.wav")).unwrap(),
+            b"not a set",
+            "no pattern delete"
+        );
+        assert_eq!(
+            std::fs::read(dir.join("sub.wav").join("inner.wav")).unwrap(),
+            b"inner",
+            "no recursion"
+        );
+        assert!(
+            !dir.join("lead_audio_spike.wav").exists(),
+            "the other sets of the books are removed"
+        );
+        assert!(!dir.join("sub_spike.wav").exists());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// #599 (D1): at the unload the audio sets go too, with no editor closed first; and the time since the removal is no wait of the watchdog after the open.
+    #[test]
+    fn the_unload_removes_the_audio_sets_and_a_long_closed_time_is_no_watchdog_error() {
+        let _serial = serial();
+        let (root, prep) = prepared_with_wavs("release-unload");
+        prep.release_sets(true);
+        assert_eq!(prepared_names(&prep).iter().filter(|n| n.ends_with(".wav")).count(), 0);
+        assert_eq!(prepared_names(&prep).len(), 3, "the MIDI sets stay");
+        // closed for a long time: the books hold old marks of work that is due
+        prep.editors_closed();
+        let old = Instant::now().checked_sub(Duration::from_secs(3600)).unwrap();
+        for k in [("q-lead".to_string(), Kind::Spike), ("q-sub".to_string(), Kind::Audio)] {
+            prep.lock().pending_since.insert(k, old);
+        }
+        prep.editors_opened();
+        let states = handle_states(&prep);
+        assert!(
+            states.iter().all(|s| s.1 == "preparing" && s.2 == "preparing"),
+            "an hour of closed time is no error after the open: {states:?}"
+        );
+        prep.cycle(true, true);
+        assert!(handle_states(&prep)
+            .iter()
+            .all(|s| *s == ("ready".into(), "ready".into(), "ready".into())));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// #599: the numbers of the ticket for the song of the measure (ten minutes, 12 tracks): the disk use before and after a close, and the time until the
+    /// handles are ready again after the next open. Run: `cargo test --release -p drumspike-ara --lib measure_the_release -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "a measure: prints numbers, writes about 3 GB"]
+    fn measure_the_release_of_the_audio_sets_of_a_ten_minute_song_with_twelve_tracks() {
+        let _serial = serial();
+        let (n, secs) = (12usize, 600.0f64);
+        let (svc, sid, root) = many_tracks("measure-release", n, secs, 700);
+        let prep = prep_many(&svc, &sid, &root, n, secs);
+        prep.lock().started = true;
+        prep.lock().used = [true, false];
+        prep.cycle(true, true);
+        let dir = prep.exports_dir().unwrap().join(PREPARED_DIR);
+        let size = |d: &Path| -> u64 {
+            std::fs::read_dir(d)
+                .unwrap()
+                .flatten()
+                .filter_map(|e| e.metadata().ok())
+                .map(|m| m.len())
+                .sum()
+        };
+        let before = size(&dir);
+        prep.editors_closed();
+        let t = Instant::now();
+        prep.release_sets(false);
+        let rm_ms = t.elapsed().as_millis();
+        let after = size(&dir);
+        let t = Instant::now();
+        prep.editors_opened();
+        prep.cycle(true, true);
+        let back_ms = t.elapsed().as_millis();
+        let ready = handle_states(&prep).iter().all(|s| s.0 == "ready" && s.1 == "ready");
+        println!(
+            "MEASURE release, ten minutes, 12 tracks, spike kind in use: .prepared/ {} MB before the close, {} MB after ({} ms to remove); \
+             after the next open the handles are ready again after {back_ms} ms (all ready: {ready})",
+            before / 1_000_000,
+            after / 1_000_000,
+            rm_ms
+        );
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

@@ -88,6 +88,26 @@ def test_a_press_of_export_inside_the_150_ms_runs_the_waiting_plan_call_first_an
     assert host.evaluate("() => window.__calls.map(c => c[0])") == ["press", "export"]
 
 
+def test_a_press_of_export_while_the_plan_call_is_in_flight_waits_for_it_and_shows_its_count(host):
+    """#599: the 150 ms timer already fired and the plan call is on its way (it answers after 400 ms); Export used to run at once with the OLD count on the screen."""
+    give(host, payload(spike=S_READY, audio=S_READY, used={"spike": True, "audio": True}))
+    open_dialog(host)
+    host.wait_for_function("() => window.__calls.some(c => c[0] === 'plan') && document.querySelector('#exReplace').textContent === '2 files will be replaced'")
+    host.evaluate("""() => { EX.tempoAck = true; window.__calls = [];
+      B.deliverPlan = async (items, dest) => { window.__calls.push(['plan', items.length]); await new Promise(r => setTimeout(r, 400)); window.__calls.push(['planned']); return { files: [], replace: 7, dest }; };   // a real delay
+      const o = B.deliverExport;
+      B.deliverExport = async (items, dest, start) => { window.__calls.push(['press', document.querySelector('#exReplace').textContent]); return o(items, dest, start); };
+      document.querySelector('#exSpikeBoth').click(); }""")   # an option change: its plan call starts after 150 ms
+    host.wait_for_function("() => window.__calls.some(c => c[0] === 'plan')")   # the timer fired: the call is in flight and the answer is 400 ms away
+    assert host.evaluate("() => EX.infoFlush") is None, "the timer fired: no flush is waiting any more, the call is in flight"
+    assert host.evaluate("() => window.__calls.map(c => c[0])") == ["plan"]
+    host.evaluate("() => { document.querySelector('#exGo').click(); }")
+    host.wait_for_function("() => EX.done > 0 && !EX.busy")
+    seen = host.evaluate("() => window.__calls.map(c => c[0])")
+    assert seen == ["plan", "planned", "press", "export"], f"Export waited for the plan call that was in flight: {seen}"
+    assert calls(host, "press")[0][1] == "7 files will be replaced", "the count on the screen when the files are written is the new one"
+
+
 def test_the_spike_types_the_single_file_and_the_selected_track(host):
     give(host, payload(spike=S_READY, audio=S_READY, used={"spike": True, "audio": True}))
     open_dialog(host)

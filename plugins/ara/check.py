@@ -144,8 +144,9 @@ Stages (`all` runs every one; each prints ok/FAIL with its evidence):
                  set, any folder, a subfolder, a name from the page, any row id)
   deliver        M1c3 (#576): the files are made before the user asks: one MIDI, spike and audio spike file per DAW track with the hits of
                  all clips at their song positions, the merged MIDI file, states and the stale rule, the handles in the page, the cost of
-                 an edit, a job that never ends, hostile track names (faults: one file per source, a stale take, every row again, one MIDI
-                 track per drum, no watchdog, the raw track name)
+                 an edit, a job that never ends, hostile track names, the audio sets gone after the last editor closed and back after the next
+                 open (#599) (faults: one file per source, a stale take, every row again, one MIDI track per drum, no watchdog, the raw
+                 track name, no removal, no new make)
   validate       clap-validator 0.4.1 on the CLAP bundle
   universal      lipo -info names arm64 and x86_64 for the CLAP and the VST3 binary
   standalone     cargo metadata --no-deps at the repo root names no plugin crate; cargo
@@ -8511,7 +8512,44 @@ def deliver_run(label: str, env: dict | None = None, args: list | None = None) -
     e.update(env or {})
     rc, summary, rows = run_phase(f"deliver-{label}", "deliver", CLAP, e, args or DELIVER_ARGS)
     reps = page_reports(rows, "deliver")
-    return {"rc": rc, "rows": rows, "rep": reps[0] if reps else {}, "cache": (OUT / f"cache-deliver-{label}").resolve()}
+    return {"rc": rc, "rows": rows, "rep": reps[0] if reps else {}, "cache": (OUT / f"cache-deliver-{label}").resolve(), "rows_label": f"deliver-{label}"}
+
+
+def host_rows(label: str, event: str) -> list:
+    """Every row the test host printed to its stdout (out/host-<label>.log) for `event`."""
+    out: list = []
+    path = OUT / f"host-{label}.log"
+    if path.exists():
+        for ln in path.read_text(errors="replace").splitlines():
+            if ln.startswith("{") and f'"{event}"' in ln:
+                try:
+                    out.append(json.loads(ln))
+                except ValueError:
+                    pass
+    return out
+
+
+def deliver_close_run(label: str, env: dict | None = None) -> dict:
+    """#599: the run `close` (two editor cycles, no drag, no press in the second): the host watches the prepared folder on the disk, see the mode `deliver` of the host."""
+    rc, summary, rows = editor_run(f"deliver-{label}", "deliver", CLAP, 2, env or {}, DELIVER_ARGS + ["--arg", "close"], timeout=300)
+    return {"rc": rc, "rows": rows, "watch": {w.get("phase"): w for w in host_rows(f"deliver-{label}", "prepared_watch")}}
+
+
+def deliver_close_parts(d: dict) -> dict:
+    """#599 (D1): the prepared AUDIO sets are gone from the disk after the last editor closed (the MIDI sets stay) and are back after the next open, with no press."""
+    w, rows = d["watch"], d["rows"]
+    o, c, b = w.get("open", {}), w.get("closed", {}), w.get("reopened", {})
+    released = [r for r in rows if r.get("event") == "prepare_released" and r.get("why") == "closed"]
+    reopened = [r for r in rows if r.get("event") == "prepare_reopened"]
+    parts: dict = {}
+    parts["deliver-close-ran"] = (d["rc"] == 0 and bool(o) and bool(c) and bool(b),
+                                  f"the host ran two editor cycles (rc={d['rc']}) and watched the prepared folder: {sorted(w)}")
+    parts["deliver-close-gone"] = (o.get("wav") == 4 and o.get("mid") == 3 and c.get("wav") == 0 and c.get("bytes") == 0 and c.get("mid") == 3 and len(released) >= 1 and released[0].get("removed") == 4 and released[0].get("failed") == 0,
+                                   f".prepared/ held {o.get('wav')} wav sets ({o.get('bytes')} bytes) and {o.get('mid')} MIDI files with the editor open; {c.get('ms')} ms after the close it holds {c.get('wav')} wav files ({c.get('bytes')} bytes) and {c.get('mid')} MIDI files; "
+                                   f"the plugin says removed {released[0].get('removed') if released else None}, failed {released[0].get('failed') if released else None}")
+    parts["deliver-close-back"] = (b.get("wav") == o.get("wav") == 4 and b.get("mid") == 3 and len(reopened) >= 1 and reopened[0].get("sets") == 4,
+                                   f"after the next open (no press) the folder holds {b.get('wav')} wav sets again after {b.get('ms')} ms (want {o.get('wav')}); the plugin says every wanted set is ready again {reopened[0].get('ms') if reopened else None} ms after the open")
+    return parts
 
 
 def deliver_expected(rep: dict, extra: tuple | None = None) -> dict:
@@ -8614,7 +8652,9 @@ def deliver_parts(d: dict) -> dict:
                              f"the drag of all files through the page: {r.get('drag')}; the drag command got {len(started[-1].get('files', [])) if started else 0} files (want 6), all in Exports/Dragged/, "
                              f"as a private pasteboard (no system session)")
     expo = Path(next(iter(prep_dirs))).parent if prep_dirs else None
-    prep = sorted(p.name for p in (expo / ".prepared").iterdir()) if expo and (expo / ".prepared").is_dir() else []
+    # #599: the folder as the host saw it while the editor was still open (the closing editor and the unload remove the audio sets, so the disk after the run holds the MIDI sets only)
+    seen = [w for w in host_rows(d["rows_label"], "prepared_watch") if w.get("phase") == "open"] if d.get("rows_label") else []
+    prep = list(seen[0].get("names") or []) if seen else []
     parts["deliver-prepared-folder"] = (len(prep) == 7 and not any(n.endswith(".tmp") for n in prep),
                                         f".prepared/ holds the 7 sets and no temporary file: {prep}")
     loose = sorted(p.name for p in expo.iterdir() if p.is_file()) if expo and expo.is_dir() else ["no Exports/"]
@@ -8721,6 +8761,7 @@ def stage_deliver() -> bool:
     ok = print_parts("", deliver_late_parts(deliver_run("late", {"DS_ARA_PREPARE_FAULT": "late-row"}, ["--seq-names", "Snare", "Snare_audio", "--seq-of", "0", "0", "1", "0", "--regions-all", "0,1.5,0", "--regions-step", "2", "--arg", "late"]))) and ok
     ok = print_parts("", deliver_names_parts(deliver_run("names", None, ["--seq-names", "Snare", "Snare_audio", "--seq-of", "0", "0", "1", "0", "--regions-all", "0,1.5,0", "--regions-step", "2", "--arg", "noedit"]))) and ok
     ok = print_parts("", deliver_watchdog_parts(deliver_run("watchdog", {"DS_ARA_PREPARE_FAULT": "forever", "DS_ARA_PREPARE_WAIT_MS": "3000"}, DELIVER_ARGS + ["--arg", "short"]))) and ok
+    ok = print_parts("", deliver_close_parts(deliver_close_run("close"))) and ok
     return print_parts("", deliver_hostile_parts(deliver_run("hostile", None, ["--seq-names", "../evil", "/abs", "--seq-of", "0", "0", "1", "0", "--regions-all", "0,1.5,0", "--regions-step", "2", "--arg", "short"]))) and ok
 
 
@@ -8742,6 +8783,10 @@ def stage_deliver_fault() -> bool:
     ok = fault_part("deliver-fault-no-file-numbering", deliver_names_parts(d), "deliver-file-names", "two sets get one file name: the later one replaces the first") and ok
     d = deliver_run("fault-watchdog", {"DS_ARA_PREPARE_FAULT": "forever,no-watchdog", "DS_ARA_PREPARE_WAIT_MS": "3000"}, DELIVER_ARGS + ["--arg", "short"])
     ok = fault_part("deliver-fault-no-watchdog", deliver_watchdog_parts(d), "deliver-watchdog", "a job that never ends and no watchdog: the handle stays preparing") and ok
+    d = deliver_close_run("fault-no-release", {"DS_ARA_PREPARE_FAULT": "no-release"})
+    ok = fault_part("deliver-fault-no-release", deliver_close_parts(d), "deliver-close-gone", "the last editor closes and the audio sets stay on the disk") and ok
+    d = deliver_close_run("fault-no-reopen", {"DS_ARA_PREPARE_FAULT": "no-reopen"})
+    ok = fault_part("deliver-fault-no-reopen", deliver_close_parts(d), "deliver-close-back", "the editor opens again and the audio sets are not made again (the handles would stay preparing)") and ok
     d = deliver_run("fault-raw-name", {"DS_ARA_PREPARE_FAULT": "raw-name"}, ["--seq-names", "../evil", "/abs", "--seq-of", "0", "0", "1", "0", "--regions-all", "0,1.5,0", "--regions-step", "2", "--arg", "short"])
     ok = fault_part("deliver-fault-raw-name", deliver_hostile_parts(d), "deliver-hostile-name", "the row name goes into the file name as it is: the name reaches the path and the plugin refuses to write it (the state is an error, no file outside the folder)") and ok
     return ok

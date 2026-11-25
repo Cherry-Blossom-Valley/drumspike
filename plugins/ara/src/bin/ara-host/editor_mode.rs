@@ -569,6 +569,40 @@ fn rss_mb() -> f64 {
     out.trim().parse::<f64>().unwrap_or(0.0) / 1024.0
 }
 
+/// #599: the folder `.prepared` below the cache of the run (the plugin makes it inside the Exports folder of the document), or none.
+fn find_prepared(root: &std::path::Path, depth: u32) -> Option<std::path::PathBuf> {
+    for e in std::fs::read_dir(root).ok()?.flatten() {
+        let p = e.path();
+        if !p.is_dir() {
+            continue;
+        }
+        if p.file_name().is_some_and(|n| n == ".prepared") {
+            return Some(p);
+        }
+        if depth > 0 {
+            if let Some(f) = find_prepared(&p, depth - 1) {
+                return Some(f);
+            }
+        }
+    }
+    None
+}
+
+/// #599: (wav files, MIDI files, bytes of the wav files) in the prepared folder, read from the disk as it is now.
+fn prepared_counts(dir: &std::path::Path) -> (usize, usize, u64) {
+    let (mut wav, mut mid, mut bytes) = (0, 0, 0);
+    for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
+        let name = e.file_name().to_string_lossy().into_owned();
+        if name.ends_with(".wav") {
+            wav += 1;
+            bytes += e.metadata().map_or(0, |m| m.len());
+        } else if name.ends_with(".mid") {
+            mid += 1;
+        }
+    }
+    (wav, mid, bytes)
+}
+
 fn arg_flag(rest: &[String], name: &str) -> bool {
     rest.iter().any(|a| a == name)
 }
@@ -881,6 +915,10 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
         } else {
             60
         });
+        // #599 (mode deliver, `--arg close`): round 1 is the ordinary driver run; the host then closes the editor, watches the prepared folder until the
+        // audio sets are gone, opens the editor again (round 2) and watches until they are back. It prints the rows `prepared_watch`.
+        let close_run = mode == "deliver" && args_value(rest, "--arg").as_deref() == Some("close");
+        let mut watch_before: (usize, usize, u64) = (0, 0, 0);
         for round in 1..=cycles {
             if !((*gui).create.expect("create"))(plugin, cocoa.as_ptr(), false) {
                 failed = Some("gui create refused".into());
@@ -973,6 +1011,26 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
             let mut saved_resp: Option<Retained<NSResponder>> = None;
             let mut got = false;
             while t0.elapsed() < limit {
+                if close_run && round == 2 {
+                    let dir = std::env::var("DS_ARA_CACHE")
+                        .ok()
+                        .and_then(|c| find_prepared(std::path::Path::new(&c), 6));
+                    let t = Instant::now();
+                    let mut now = (0, 0, 0);
+                    while t.elapsed() < Duration::from_secs(15) {
+                        pump(&app);
+                        now = dir.as_deref().map_or((0, 0, 0), prepared_counts);
+                        if now.0 >= watch_before.0 && now.0 > 0 {
+                            break;
+                        }
+                    }
+                    println!(
+                        "{{\"event\":\"prepared_watch\",\"phase\":\"reopened\",\"wav\":{},\"mid\":{},\"bytes\":{},\"want_wav\":{},\"ms\":{}}}",
+                        now.0, now.1, now.2, watch_before.0, t.elapsed().as_millis()
+                    );
+                    got = true;
+                    break;
+                }
                 let elapsed = t0.elapsed().as_millis() as u64;
                 let due: Vec<Action> = schedule
                     .iter()
@@ -1399,7 +1457,53 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                 // M1b8: the notes for the host after the page's edit (the first notes of the run are made before any edit)
                 doc.print_all_notes("after-song", None);
             }
+            let watch_dir = if mode == "deliver" {
+                std::env::var("DS_ARA_CACHE")
+                    .ok()
+                    .and_then(|c| find_prepared(std::path::Path::new(&c), 6))
+            } else {
+                None
+            };
+            if mode == "deliver" && round == 1 && got {
+                // the folder as it is while the editor is open (the closing editor removes the audio sets: a check after the run sees the later state)
+                watch_before = watch_dir.as_deref().map_or((0, 0, 0), prepared_counts);
+                let names: Vec<String> = watch_dir
+                    .as_deref()
+                    .and_then(|d| std::fs::read_dir(d).ok())
+                    .map(|r| {
+                        let mut v: Vec<String> = r
+                            .flatten()
+                            .map(|e| e.file_name().to_string_lossy().into_owned())
+                            .collect();
+                        v.sort();
+                        v
+                    })
+                    .unwrap_or_default();
+                println!(
+                    "{{\"event\":\"prepared_watch\",\"phase\":\"open\",\"wav\":{},\"mid\":{},\"bytes\":{},\"names\":{}}}",
+                    watch_before.0,
+                    watch_before.1,
+                    watch_before.2,
+                    serde_json::to_string(&names).unwrap_or_else(|_| "[]".into())
+                );
+            }
             ((*gui).destroy.expect("gui.destroy"))(plugin);
+            if close_run && round == 1 && got {
+                // the editor is closed: the worker removes the audio sets by itself; the host only looks at the disk
+                let t = Instant::now();
+                let mut now = watch_before;
+                while t.elapsed() < Duration::from_secs(8) {
+                    pump(&app);
+                    now = watch_dir.as_deref().map_or((0, 0, 0), prepared_counts);
+                    if now.0 == 0 {
+                        break;
+                    }
+                }
+                println!(
+                    "{{\"event\":\"prepared_watch\",\"phase\":\"closed\",\"wav\":{},\"mid\":{},\"bytes\":{},\"ms\":{}}}",
+                    now.0, now.1, now.2, t.elapsed().as_millis()
+                );
+            }
             if !got {
                 failed = Some(format!(
                     "no page report after {} s (phase {mode}, round {round})",

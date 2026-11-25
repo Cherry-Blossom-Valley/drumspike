@@ -592,6 +592,7 @@
     out.want_audio = await inv("plugin_deliver_want", { kind: "audio" });
     out.t_audio = await until(async function () { return allIn(await state(), "audio", "ready"); }, 90000);
     var st2 = await state(); out.state2 = st2; await sleepD(300); out.dom2 = dom();
+    if (T.arg === "close") { post(Object.assign({ kind: "deliver" }, out)); return; }   // #599: every set is ready; the host closes the editor, watches the prepared folder and opens it again
     var items = []; st2.rows.forEach(function (r) { ["midi", "spike", "audio"].forEach(function (k) { items.push({ row: r.id, kind: k }); }); });
     var all = await inv("plugin_deliver_take", { items: items }); out.take_all = all;
     if (all.ok) { try { await B.dragFiles(all.v.files); out.drag = "ok"; } catch (e) { out.drag = String(e && e.message || e); } }

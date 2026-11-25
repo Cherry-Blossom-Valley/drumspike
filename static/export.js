@@ -204,7 +204,12 @@ function exInfo() {
     EX.infoTimer = setTimeout(EX.infoFlush, 150);
   });
 }
-async function exInfoRun() {   // the replace count of the current options (the newest answer wins)
+function exInfoRun() {   // #599: in a DAW the running call is kept, so a press of Export after the 150 ms timer fired waits for it too (the timer clears infoFlush, not the call)
+  const run = exInfoRun1();
+  if (hostMode()) { EX.infoRun = run; run.then(() => { if (EX.infoRun === run) EX.infoRun = null; }); }
+  return run;
+}
+async function exInfoRun1() {   // the replace count of the current options (the newest answer wins)
   const my = ++EX.infoSeq;
   if (!exFormats().length || !exTrackSets().names.length) { EX.replace = 0; exRender(); return; }
   try {
@@ -387,6 +392,7 @@ async function exRun() {
   /* #597: a press of Export inside the 150 ms of an option change runs the waiting plan call first: the dialog shows the replace count of the options it exports with
      before any file is replaced (the count on the screen was the old one) */
   if (hostMode() && EX.infoFlush) await EX.infoFlush();
+  if (hostMode() && EX.infoRun) await EX.infoRun;   // #599: the plan call that the timer already started
   /* #151: a MIDI export with no tempo set uses the default 120 BPM: ask before the first export writes */
   if (EX.midi && !EX.tempoAck) {
     const a = await askDefaultTempo();

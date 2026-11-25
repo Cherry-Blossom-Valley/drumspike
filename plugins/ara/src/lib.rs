@@ -646,6 +646,8 @@ struct DocShared {
     auto_retry: AtomicU64,
     /// M1c3 (#576): the preparation of the files that leave the plugin (made on first use, by `prep()`).
     prep: std::sync::OnceLock<Arc<prepare::Prep>>,
+    /// #599: how many editors of this document are open (a plugin instance counts once, from `gui.set_parent` to `gui.destroy`).
+    editors: AtomicU64,
 }
 
 /// The regions and the rate to map the notes of a source with: those of the last round when
@@ -773,6 +775,7 @@ impl DocShared {
             states_last: Mutex::new(None),
             auto_retry: AtomicU64::new(0),
             prep: std::sync::OnceLock::new(),
+            editors: AtomicU64::new(0),
             canceller: svc.canceller(),
             id: Mutex::new(id),
             svc: Mutex::new(svc),
@@ -1667,6 +1670,32 @@ impl DocShared {
                 p
             })
             .clone()
+    }
+
+    /// #599: an editor of this document opened. The first one lets the preparation make the audio sets again (when they were in use before).
+    fn editor_opened(self: &Arc<Self>) {
+        if self.editors.fetch_add(1, Ordering::SeqCst) == 0 {
+            self.prep().editors_opened();
+        }
+    }
+
+    /// #599: an editor of this document closed. The last one lets the worker of the preparation remove the audio sets (the close does no file work).
+    fn editor_closed(self: &Arc<Self>) {
+        let mut n = self.editors.load(Ordering::SeqCst);
+        while n > 0 {
+            match self
+                .editors
+                .compare_exchange(n, n - 1, Ordering::SeqCst, Ordering::SeqCst)
+            {
+                Ok(_) => {
+                    if n == 1 {
+                        self.prep().editors_closed();
+                    }
+                    return;
+                }
+                Err(now) => n = now,
+            }
+        }
     }
 
     /// M1c3: something that the prepared files are made from changed.
@@ -5745,6 +5774,30 @@ struct Plugin {
     /// The size the editor asks for, packed (width << 32 | height): read by any thread the host calls
     /// `get_size` from.
     gui_size: std::sync::atomic::AtomicU64,
+    /// #599: the document this instance counts as an open editor of (set at `gui.set_parent`, taken at `gui.destroy` and when the instance goes).
+    attached: Mutex<Option<Arc<DocShared>>>,
+}
+
+impl Plugin {
+    /// The editor of this instance is shown in a window: it counts for its document (once).
+    pub(crate) fn note_attached(&self) {
+        let doc = self.doc.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let Some(doc) = doc else { return };
+        let mut a = self.attached.lock().unwrap_or_else(|e| e.into_inner());
+        if a.is_none() {
+            *a = Some(doc.clone());
+            drop(a);
+            doc.editor_opened();
+        }
+    }
+
+    /// The window of this instance's editor closed (or the instance goes): it no longer counts.
+    pub(crate) fn note_detached(&self) {
+        let doc = self.attached.lock().unwrap_or_else(|e| e.into_inner()).take();
+        if let Some(doc) = doc {
+            doc.editor_closed();
+        }
+    }
 }
 
 unsafe extern "C" fn pext_factory(_p: *const clap_plugin) -> *const ARAFactory {
@@ -5853,6 +5906,7 @@ unsafe extern "C" fn p_init(_p: *const clap_plugin) -> bool {
 
 unsafe extern "C" fn p_destroy(p: *const clap_plugin) {
     guard("destroy", (), move || {
+        (*((*p).plugin_data as *mut Plugin)).note_detached();
         drop(Box::from_raw((*p).plugin_data as *mut Plugin));
     })
 }
@@ -6457,6 +6511,7 @@ unsafe extern "C" fn f_create(
             editor: std::cell::RefCell::new(None),
             host_name: host_name_of(host),
             gui_size: std::sync::atomic::AtomicU64::new((1000u64 << 32) | 640),
+            attached: Mutex::new(None),
         }));
         (*p).clap.plugin_data = p as *mut c_void;
         &(*p).clap
@@ -7077,6 +7132,36 @@ mod tests {
         // a second press at once is still refused for both rows
         let again = doc.retry_rows(&["q7".to_string(), "q9".to_string()]);
         assert_eq!(again["started"], json!([]), "{again}");
+    }
+
+    /// #599: "Retry all" with a track on two DAW track rows whose job cannot start for a real reason (the old round of the track still runs): the refusal shows
+    /// for BOTH rows with its reason; the rule that the second row shows no refusal for the job that the first row started does not hide a refusal.
+    #[test]
+    fn retry_all_shows_the_refusal_of_a_track_that_cannot_start_for_a_real_reason() {
+        let (doc, a) = on_two_rows();
+        set_fail(&a, firstopen::Fail::Read);
+        a.life.in_round.store(true, Ordering::SeqCst); // the old round of the track is in fact still running
+        let r = doc.retry_rows(&["q7".to_string(), "q9".to_string()]);
+        assert_eq!(r["started"], json!([]), "no job starts: {r}");
+        let refused = r["refused"].as_array().unwrap();
+        assert_eq!(refused.len(), 2, "both rows show the refusal: {r}");
+        for (row, id) in refused.iter().zip(["q7", "q9"]) {
+            assert_eq!(row["id"], json!(id), "{r}");
+            assert!(
+                row["reason"].as_str().unwrap().contains("still working"),
+                "the reason shows: {r}"
+            );
+        }
+        assert_eq!(
+            a.life.retry_at.load(Ordering::SeqCst),
+            0,
+            "nothing was marked as started"
+        );
+        // the round ends: the same press starts the track once and the second row shows no refusal
+        a.life.in_round.store(false, Ordering::SeqCst);
+        let ok = doc.retry_rows(&["q7".to_string(), "q9".to_string()]);
+        assert_eq!(ok["started"], json!(["q7", "q9"]), "{ok}");
+        assert_eq!(ok["refused"], json!([]), "{ok}");
     }
 
     /// #593 round 2 (S2): a row that holds a failed source and a done one counts as started when the failed one was started in this press.
