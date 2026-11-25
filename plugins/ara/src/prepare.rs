@@ -86,14 +86,50 @@ pub fn live_threads() -> usize {
     LIVE.load(std::sync::atomic::Ordering::SeqCst)
 }
 
-/// The plugin library is about to be unmapped: every worker thread of the preparation stops. Waits at most `wait` for them; true when none runs.
+/// The exports of the dialog that run now (#597): each one runs on the request thread of the page, not on a worker thread, so `LIVE` does not count it.
+static EXPORTS_LIVE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// How many exports of the dialog run now (a plugin unload waits for them).
+#[must_use]
+pub fn live_exports() -> usize {
+    EXPORTS_LIVE.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// Counts one export of the dialog (its request thread) until it ends, however it ends. `stop_all` waits for it.
+pub struct ExportLive;
+
+impl ExportLive {
+    #[must_use]
+    pub fn new() -> Self {
+        EXPORTS_LIVE.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        ExportLive
+    }
+}
+
+impl Default for ExportLive {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Drop for ExportLive {
+    fn drop(&mut self) {
+        EXPORTS_LIVE.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// The plugin library is about to be unmapped: every worker thread of the preparation and every running export of the dialog stops (a copy stops at its
+/// next checkpoint: between two pieces of 1 MiB, and before the first rename; its temporary files are removed). Waits at most `wait` for them; true when
+/// none runs.
 pub fn stop_all(wait: Duration) -> bool {
     STOP.store(true, std::sync::atomic::Ordering::SeqCst);
     let t0 = Instant::now();
-    while live_threads() > 0 && t0.elapsed() < wait {
+    // the fault run `no-export-wait` (a gate build only): the unload does not wait for a running export (the state before #597)
+    let running = || live_threads() + if has("no-export-wait") { 0 } else { live_exports() } > 0;
+    while running() && t0.elapsed() < wait {
         std::thread::sleep(Duration::from_millis(5));
     }
-    live_threads() == 0
+    !running()
 }
 
 struct LiveGuard(Arc<std::sync::atomic::AtomicBool>);
@@ -106,6 +142,12 @@ impl Drop for LiveGuard {
 
 fn stopped() -> bool {
     STOP.load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// The stop sign as an export of the dialog sees it. The fault run `no-export-wait` (a gate build only) is the state before #597: an export never sees the
+/// stop and the unload does not wait for it.
+fn export_stopped() -> bool {
+    stopped() && !has("no-export-wait")
 }
 
 /// A point inside a long job where it looks at the stop sign (between sources, between jobs), so `stop_all` returns in time.
@@ -671,8 +713,13 @@ impl ExportHooks {
             rename: Box::new(|a, b| std::fs::rename(a, b)),
             after_copy: Box::new(|| {
                 // the fault run `slow-copy` (a gate build only) keeps the copy open for a while: the stage changes the hits in that time
-                if has("slow-copy") {
-                    std::thread::sleep(Duration::from_millis(2500));
+                if has("slow-copy") || has("slow-copy-long") {
+                    // in small steps: a plugin unload (the stop sign) ends the wait at once
+                    let ms = if has("slow-copy-long") { 8000 } else { 2500 };
+                    let t0 = Instant::now();
+                    while t0.elapsed() < Duration::from_millis(ms) && !export_stopped() {
+                        std::thread::sleep(Duration::from_millis(10));
+                    }
                 }
             }),
         }
@@ -762,6 +809,8 @@ struct ExportProgress {
     running: std::sync::atomic::AtomicBool,
     cancel: std::sync::atomic::AtomicBool,
     track: Mutex<String>,
+    /// #597: every file is copied and the hits are not checked yet (the stage waits for this signal instead of a fixed time, then edits).
+    copied: std::sync::atomic::AtomicBool,
 }
 
 /// M1d4: the ids of the DAW track rows that are not done: `(id, in_progress)`. A failed or offline row is not in progress.
@@ -828,7 +877,7 @@ impl Prep {
         }
         {
             let mut st = self.lock();
-            if stopped() && live_threads() == 0 {
+            if stopped() && live_threads() + live_exports() == 0 {
                 STOP.store(false, std::sync::atomic::Ordering::SeqCst);
             }
             let now = Instant::now();
@@ -1324,6 +1373,7 @@ impl Prep {
         hooks: &ExportHooks,
     ) -> Result<Value, ExportError> {
         use std::sync::atomic::Ordering::SeqCst;
+        let _live = ExportLive::new();
         // one export at a time: the flags of a running export are never touched by another call
         if self.exp.running.compare_exchange(false, true, SeqCst, SeqCst).is_err() {
             return Err((409, "an export is running".to_string()).into());
@@ -1425,10 +1475,15 @@ impl Prep {
                     self.wake();
                     return Err((409, format!("{track}: preparing")).into());
                 }
+                Err(CopyErr::Other(_)) if stopped() => {
+                    return Err((409, "the plugin is closing: nothing was written".to_string()).into())
+                }
                 Err(CopyErr::Other(e)) => return Err((500, format!("{track}: could not copy the file: {e}")).into()),
             }
             self.exp.done.fetch_add(1, SeqCst);
         }
+        self.exp.copied.store(true, SeqCst);
+        let _copied = BusyGuard(&self.exp.copied);
         (hooks.after_copy)();
         // the hits may have changed during the copy: a set that is not ready for the hits of now is not delivered
         if !has("no-late-check") {
@@ -1448,6 +1503,10 @@ impl Prep {
         }
         if self.exp.cancel.load(SeqCst) {
             return Err((409, "cancelled: nothing was written".to_string()).into());
+        }
+        // the last checkpoint: a plugin unload stops here, before any file is replaced (the renames after it are quick and leave complete files)
+        if export_stopped() {
+            return Err((409, "the plugin is closing: nothing was written".to_string()).into());
         }
         let mut written: Vec<String> = Vec::new();
         for (i, (key, _, out)) in plan.iter().enumerate() {
@@ -1499,7 +1558,8 @@ impl Prep {
             self.exp.cancel.store(true, SeqCst);
         }
         json!({"busy": self.exp.busy.load(SeqCst), "done": self.exp.done.load(SeqCst), "total": self.exp.total.load(SeqCst),
-               "track": self.exp.track.lock().unwrap_or_else(|e| e.into_inner()).clone()})
+               "track": self.exp.track.lock().unwrap_or_else(|e| e.into_inner()).clone(),
+               "copied": self.exp.copied.load(SeqCst) && !has("no-copied-signal")})
     }
 
     fn name_of(&self, g: &Gathered, id: &str) -> String {
@@ -2970,6 +3030,87 @@ mod tests {
         let got = prep.export_to(&twice, &dest, &[], false).unwrap();
         assert_eq!(got["files"].as_array().unwrap().len(), 2, "q0 twice is one file");
         assert_eq!(prep.export_names(&twice).unwrap().len(), 2);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// #597: the unload of the plugin waits for an export that runs on a request thread, the copy stops at its next checkpoint, no thread of the export runs after
+    /// `stop_all` returns, the temporary files are gone and no old file was replaced.
+    #[test]
+    fn the_unload_waits_for_a_running_copy_and_the_copy_stops_without_replacing_a_file() {
+        let _serial = serial();
+        let _one = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_svc, _sid, root, prep, dest, items) = five_rows("unload-copy");
+        let in_copy = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let in_copy2 = Arc::clone(&in_copy);
+        let (prep2, dest2) = (Arc::clone(&prep), dest.clone());
+        let runner = std::thread::spawn(move || {
+            let hooks = real_hooks_with(
+                Box::new(|a, b| std::fs::rename(a, b)),
+                Box::new(move |a, b, c| {
+                    // a slow copy: it holds the thread until the stop sign, then a little longer, then the real copy sees the sign at its checkpoint
+                    in_copy2.store(true, std::sync::atomic::Ordering::SeqCst);
+                    while !stopped() {
+                        std::thread::sleep(Duration::from_millis(5));
+                    }
+                    std::thread::sleep(Duration::from_millis(150));
+                    copy_file(a, b, c)
+                }),
+                Box::new(|| {}),
+            );
+            prep2.export_to_with(&items, &dest2, &[], false, &hooks)
+        });
+        let t0 = Instant::now();
+        while !in_copy.load(std::sync::atomic::Ordering::SeqCst) && t0.elapsed() < Duration::from_secs(10) {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(in_copy.load(std::sync::atomic::Ordering::SeqCst), "the copy runs");
+        assert_eq!(live_exports(), 1, "the export is counted");
+        let t1 = Instant::now();
+        let ended = stop_all(Duration::from_millis(4000));
+        let took = t1.elapsed();
+        // THE point: when stop_all has returned no thread of the export is inside the plugin code any more
+        let still_running = !runner.is_finished();
+        STOP.store(false, std::sync::atomic::Ordering::SeqCst);
+        assert!(ended, "stop_all saw the export end");
+        assert!(
+            !still_running,
+            "the export thread had ended when stop_all returned (after {took:?})"
+        );
+        assert!(took >= Duration::from_millis(100), "it waited for the copy: {took:?}");
+        let e = runner.join().unwrap().unwrap_err();
+        assert_eq!(e.code, 409, "{}", e.text);
+        assert!(e.text.contains("nothing was written"), "{}", e.text);
+        assert_eq!(live_exports(), 0);
+        assert!(temps_in(&dest).is_empty(), "the temporary files are removed");
+        for k in 0..5 {
+            assert_eq!(
+                std::fs::read(dest.join(format!("t{k}_spike.mid"))).unwrap(),
+                b"OLD",
+                "t{k} was not replaced"
+            );
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// #597: a stop that comes between the last copy and the first rename (the last checkpoint) writes nothing either.
+    #[test]
+    fn a_stop_after_the_last_copy_replaces_no_file() {
+        let _serial = serial();
+        let _one = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let (_svc, _sid, root, prep, dest, items) = five_rows("unload-late");
+        let hooks = real_hooks_with(
+            Box::new(|a, b| std::fs::rename(a, b)),
+            Box::new(copy_file),
+            Box::new(|| STOP.store(true, std::sync::atomic::Ordering::SeqCst)),
+        );
+        let e = prep.export_to_with(&items, &dest, &[], false, &hooks).unwrap_err();
+        STOP.store(false, std::sync::atomic::Ordering::SeqCst);
+        assert_eq!(e.code, 409, "{}", e.text);
+        assert!(e.text.contains("closing"), "{}", e.text);
+        assert!(temps_in(&dest).is_empty());
+        for k in 0..5 {
+            assert_eq!(std::fs::read(dest.join(format!("t{k}_spike.mid"))).unwrap(), b"OLD");
+        }
         let _ = std::fs::remove_dir_all(&root);
     }
 

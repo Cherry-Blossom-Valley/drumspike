@@ -2036,6 +2036,10 @@ fn defer_msg(msg: Msg) {
 /// The longest the unload of the library waits for the worker.
 const UNLOAD_WAIT: std::time::Duration = std::time::Duration::from_millis(1500);
 
+/// The longest the unload waits for the preparation of the files and for a running export of the dialog (#597). A copy stops at its next checkpoint
+/// (between two pieces of 1 MiB), so the wait is short unless the disk blocks one write; the main thread is blocked for at most this time, once, at the unload.
+const PREPARE_UNLOAD_WAIT: std::time::Duration = std::time::Duration::from_millis(4000);
+
 /// The report row of the services made and dropped in this process (written before the
 /// last service row, so that row stays the last line).
 fn services_row() -> String {
@@ -3599,7 +3603,17 @@ fn unload_worker() {
         return;
     }
     // the worker threads of the preparation of the files (M1c3) run library code too: they stop before the library can be unmapped
-    prepare::stop_all(UNLOAD_WAIT);
+    let (exports_at_start, t0) = (prepare::live_exports(), std::time::Instant::now());
+    let prepare_ended = prepare::stop_all(PREPARE_UNLOAD_WAIT);
+    // a row for the check: how many exports ran at the unload, how long it waited, and how many still run after it
+    if exports_at_start > 0 || !prepare_ended {
+        session().log(
+            json!({"event": "prepare_unloaded", "ended": prepare_ended, "exports_at_start": exports_at_start,
+                "exports_after": prepare::live_exports(), "threads_after": prepare::live_threads(),
+                "ms": t0.elapsed().as_millis() as u64, "unix_ns": now_ns().to_string()})
+            .to_string(),
+        );
+    }
     let Some(s) = SESSION.get() else { return };
     let started = std::time::Instant::now();
     let docs: Vec<Arc<DocShared>> = LIVE_DOCS

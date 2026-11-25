@@ -468,11 +468,16 @@ fn spawn_request(shared: &Arc<Shared>, rest: String, query: String, body: Vec<u8
         return;
     }
     let sh = Arc::clone(shared);
+    // #597: the request thread of an export runs library code, so a plugin unload counts it (taken before the thread starts, dropped when it ends)
+    let live = rest
+        .starts_with("invoke/plugin_deliver_export")
+        .then(crate::prepare::ExportLive::new);
     let slot: Arc<Mutex<Option<Responder>>> = Arc::new(Mutex::new(Some(responder)));
     let slot2 = Arc::clone(&slot);
     let spawned = std::thread::Builder::new()
         .name("drumspike-ara-page".into())
         .spawn(move || {
+            let _live = live;
             REQ_SEQ.with(|c| c.set(seq));
             let run = || route(&sh, &rest, &query, &body);
             let answer = if crate::test_switch("DS_ARA_GUARD_FAULT").as_deref() == Ok("off") {

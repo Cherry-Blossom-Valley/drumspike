@@ -924,15 +924,27 @@
       await ready("#exDragMidi"); await ready("#exDragSpikes");
       var rowL = out.regions.rows[0], homeL = rowL.srcs[0], clipL = rowL.clips.filter(function (c) { return c.src === homeL; })[0];
       var nL = EX.done;
+      var pL0 = await inv("plugin_deliver_progress");   // false before the press: the wait for the signal below is not true already
       q("#exGo").click();
       out.notice_late = await answerNotice();
-      await sleepE(600);
+      var sigL = await until(async function () { var p = await inv("plugin_deliver_progress"); return p.ok && p.v.copied === true; }, 30000);   // #597: the signal of the plugin (the copy is done, the late check not yet), no fixed time
+      out.signal = { ms: sigL, before_copied: pL0.ok ? pL0.v.copied : null };
       var edL = await inv("events_edit", { sid: S.sid, name: homeL, ops: [{ op: "add", t: clipL.a + 1.07, v: 100 }] });
       out.edit = { ok: edL.ok, song: clipL.s + 1.07 };
       await until(function () { return EX.done > nL && !EX.busy; }, 120000);
       await sleepE(300);
       snap("late");
       post(Object.assign({ kind: "exportrows" }, out)); return;
+    }
+    if (OTHER === "unload") {   // #597: the host unloads the library while the export copies (the fault slow-copy-long keeps the copy open): the plugin must wait for it
+      await ready("#exDragMidi"); await ready("#exDragSpikes");
+      var p0 = await inv("plugin_deliver_progress");
+      out.before = { copied: p0.ok ? p0.v.copied : null, busy: p0.ok ? p0.v.busy : null };   // false before the press: the wait below is not true already
+      q("#exGo").click();
+      out.notice_unload = await answerNotice();
+      var sigMs = await until(async function () { var p = await inv("plugin_deliver_progress"); return p.ok && p.v.copied === true; }, 30000);   // the signal of the plugin: every file is copied, the hits are not checked yet
+      out.unload = { signal_ms: sigMs };
+      post(Object.assign({ kind: "exportrows" }, out)); return;   // the host destroys the editor and unloads the library now
     }
     await ready("#exDragMidi");
     snap("open");
