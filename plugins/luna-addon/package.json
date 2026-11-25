@@ -1,0 +1,14 @@
+{
+  "name": "drumspike-luna-addon-proof",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "description": "Proof (#600): a LUNA Add On that delivers the hits and spike files of the Drum Spike plugin into new tracks. No npm dependencies: the SDK build is fetched once into vendor/ (npm run fetch-sdk).",
+  "scripts": {
+    "test": "node --test \"tests/*.test.mjs\"",
+    "fetch-sdk": "node tools/fetch-sdk.mjs",
+    "make-list": "node tools/make-list.mjs",
+    "measure": "node tools/measure.mjs"
+  },
+  "engines": { "node": ">=22" }
+}

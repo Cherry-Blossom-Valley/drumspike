@@ -1,0 +1,18 @@
+{
+    "package_name": "Drum Spike Deliver",
+    "id": "com.cherryblossomvalley.drumspike_deliver_proof",
+    "title": "Drum Spike Deliver (proof)",
+    "version": "0.1.0",
+    "manufacturer": "Cherry Blossom Valley",
+    "description": "Proof: makes one MIDI track and one spike audio track per drum track from the prepared files of the Drum Spike plugin, in one undo step.",
+    "categories": ["Import & Export"],
+    "sdk_version": "3.1.2",
+    "min_luna_version": "3.1.2",
+    "engines": ["luna"],
+    "html": "index.html",
+    "target": "window",
+    "floating": true,
+    "show_with_session": false,
+    "width": 640,
+    "height": 620
+}
