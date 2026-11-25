@@ -204,7 +204,14 @@ function exInfo() {
     EX.infoTimer = setTimeout(EX.infoFlush, 150);
   });
 }
-async function exInfoRun() {   // the replace count of the current options (the newest answer wins)
+function exInfoRun() {   // #599: in a DAW the running call is kept, so a press of Export after the 150 ms timer fired waits for it too (the timer clears infoFlush, not the call)
+  if (!hostMode()) return exInfoRun1();
+  const run = exInfoRun1().catch(e => { if (EX.open) setMsg(`replace count failed: ${errText(e)}`, "error"); });   // a failure of the call is shown and never an unhandled rejection
+  EX.infoRun = run;
+  run.then(() => { if (EX.infoRun === run) EX.infoRun = null; });
+  return run;
+}
+async function exInfoRun1() {   // the replace count of the current options (the newest answer wins)
   const my = ++EX.infoSeq;
   if (!exFormats().length || !exTrackSets().names.length) { EX.replace = 0; exRender(); return; }
   try {
@@ -386,7 +393,10 @@ async function exRun() {
   EX.busy = true;   // set before the notice: while it asks, exClose (Escape) is refused
   /* #597: a press of Export inside the 150 ms of an option change runs the waiting plan call first: the dialog shows the replace count of the options it exports with
      before any file is replaced (the count on the screen was the old one) */
-  if (hostMode() && EX.infoFlush) await EX.infoFlush();
+  if (hostMode()) {   // #599: the plan call that the timer already started, and any newer one that starts while Export waits: until none is left. A failed call must not stop Export from clearing `busy`.
+    try { if (EX.infoFlush) await EX.infoFlush(); } catch (e) { /* the call shows its own failure */ }
+    for (let r = EX.infoRun; r; r = EX.infoRun) { try { await r; } catch (e) { /* the same */ } if (EX.infoRun === r) break; }
+  }
   /* #151: a MIDI export with no tempo set uses the default 120 BPM: ask before the first export writes */
   if (EX.midi && !EX.tempoAck) {
     const a = await askDefaultTempo();

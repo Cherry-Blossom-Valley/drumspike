@@ -189,8 +189,9 @@ Cost, with numbers from the code:
 - Audio spike: reads the source and writes the same length, plus the sum for a multi-source row. The flags "spike used" and "audio
   used" are in memory per document and start `off` after a reopen.
 - Disk, the true rule (round 2): one prepared file per (row, kind) in `.prepared/`. At every pass the worker removes the files that no ready
-  set holds (an old set, a temporary file, the set of a row that is gone) inside `.prepared/` only. The folder itself stays until the user deletes it
-  (there is no removal at the close of the last editor: the sets stay valid for the next open). `Exports/Dragged/` is never cleaned: what was
+  set holds (an old set, a temporary file, the set of a row that is gone) inside `.prepared/` only. The folder itself stays until the user deletes it.
+  #599 (the disk space): the prepared AUDIO sets (spike, audio spike) are removed when no editor of the document was open for the grace period (60 s) and at the unload; the MIDI sets and the
+  merged file stay (see the note of M1c4, round 4). `Exports/Dragged/` is never cleaned: what was
   delivered stays. Bound (ruling R11, S8): before a wav file is written the size is estimated (`ceil(song end x rate) x 4` bytes: float 32, one
   channel) and the job is refused with `error: not enough room for the prepared files (limit 2 GiB)` when the estimate and the bytes already in `.prepared/`
   (every file, temporary files too, minus the file it replaces) are over 2 GiB; the real size is checked again before the rename. Not bounded by the

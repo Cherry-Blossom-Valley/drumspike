@@ -1669,6 +1669,19 @@ impl DocShared {
             .clone()
     }
 
+    /// #599: an editor of this document opened (the count lives in the preparation, under its lock). It cancels a grace period or brings the audio sets back.
+    fn editor_opened(self: &Arc<Self>) {
+        self.prep().editors_opened();
+    }
+
+    /// #599: an editor of this document closed. The last one starts the grace period after which the worker removes the audio sets (the close does no file
+    /// work). A document that never made a preparation has nothing to remove: none is made here.
+    fn editor_closed(self: &Arc<Self>) {
+        if let Some(p) = self.prep.get() {
+            p.editors_closed();
+        }
+    }
+
     /// M1c3: something that the prepared files are made from changed.
     fn wake_prep(&self) {
         if let Some(p) = self.prep.get() {
@@ -5745,6 +5758,42 @@ struct Plugin {
     /// The size the editor asks for, packed (width << 32 | height): read by any thread the host calls
     /// `get_size` from.
     gui_size: std::sync::atomic::AtomicU64,
+    /// #599: the document this instance counts as an open editor of (set at `gui.set_parent`, taken at `gui.destroy` and when the instance goes).
+    attached: Mutex<Option<Arc<DocShared>>>,
+    /// #599: the editor of this instance is in a window (set at `gui.set_parent`, cleared at `gui.destroy`), even when the document was not known yet: the bind counts it.
+    shown: AtomicBool,
+}
+
+impl Plugin {
+    /// The editor of this instance is shown in a window: it counts for its document (once).
+    pub(crate) fn note_attached(&self) {
+        self.shown.store(true, Ordering::SeqCst);
+        self.count_editor();
+    }
+
+    /// Counts this instance's editor for its document once, when both the window and the document are known (the bind can come after the window).
+    pub(crate) fn count_editor(&self) {
+        if !self.shown.load(Ordering::SeqCst) {
+            return;
+        }
+        let doc = self.doc.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let Some(doc) = doc else { return };
+        let mut a = self.attached.lock().unwrap_or_else(|e| e.into_inner());
+        if a.is_none() {
+            *a = Some(doc.clone());
+            drop(a);
+            doc.editor_opened();
+        }
+    }
+
+    /// The window of this instance's editor closed (or the instance goes): it no longer counts.
+    pub(crate) fn note_detached(&self) {
+        self.shown.store(false, Ordering::SeqCst);
+        let doc = self.attached.lock().unwrap_or_else(|e| e.into_inner()).take();
+        if let Some(doc) = doc {
+            doc.editor_closed();
+        }
+    }
 }
 
 unsafe extern "C" fn pext_factory(_p: *const clap_plugin) -> *const ARAFactory {
@@ -5760,6 +5809,7 @@ unsafe extern "C" fn pext_bind(
         let plugin = (*p).plugin_data as *mut Plugin;
         if !dc.is_null() {
             *(*plugin).doc.lock().unwrap_or_else(|e| e.into_inner()) = Some(controller_of(dc).doc.clone());
+            (*plugin).count_editor(); // #599: a window that was shown before the document was known counts now
         }
         let me = plugin as *mut c_void;
         let has = |role: u32| assigned & role as i32 != 0;
@@ -5853,6 +5903,7 @@ unsafe extern "C" fn p_init(_p: *const clap_plugin) -> bool {
 
 unsafe extern "C" fn p_destroy(p: *const clap_plugin) {
     guard("destroy", (), move || {
+        (*((*p).plugin_data as *mut Plugin)).note_detached();
         drop(Box::from_raw((*p).plugin_data as *mut Plugin));
     })
 }
@@ -6457,6 +6508,8 @@ unsafe extern "C" fn f_create(
             editor: std::cell::RefCell::new(None),
             host_name: host_name_of(host),
             gui_size: std::sync::atomic::AtomicU64::new((1000u64 << 32) | 640),
+            attached: Mutex::new(None),
+            shown: AtomicBool::new(false),
         }));
         (*p).clap.plugin_data = p as *mut c_void;
         &(*p).clap
@@ -7077,6 +7130,59 @@ mod tests {
         // a second press at once is still refused for both rows
         let again = doc.retry_rows(&["q7".to_string(), "q9".to_string()]);
         assert_eq!(again["started"], json!([]), "{again}");
+    }
+
+    /// #599 round 2 (S2): an editor that was shown BEFORE the document was known (the bind comes later) is counted at the bind; its close counts it out once.
+    #[test]
+    fn an_editor_shown_before_the_bind_is_counted_at_the_bind_and_out_at_its_close() {
+        let (doc, _a, _b) = first_open_doc();
+        unsafe {
+            let clap = f_create(std::ptr::null(), std::ptr::null(), PLUGIN_ID);
+            // checked reads of both pointers: the factory answers null when it refuses, and a plugin without its data is no plugin
+            let data = clap.as_ref().expect("the factory made the plugin").plugin_data;
+            let plugin: &Plugin = data.cast::<Plugin>().as_ref().expect("the plugin has its data");
+            plugin.note_attached(); // gui.set_parent: the window is up, the document is not known
+            assert!(doc.prep.get().is_none_or(|p| p.open_editors() == 0), "not counted yet");
+            *plugin.doc.lock().unwrap() = Some(doc.clone()); // the bind
+            plugin.count_editor();
+            plugin.count_editor(); // a second call counts nothing more
+            assert_eq!(doc.prep().open_editors(), 1, "counted at the bind");
+            plugin.note_detached();
+            assert_eq!(doc.prep().open_editors(), 0, "counted out at the close");
+            plugin.note_detached();
+            assert_eq!(doc.prep().open_editors(), 0, "and only once");
+            p_destroy(clap);
+        }
+    }
+
+    /// #599: "Retry all" with a track on two DAW track rows whose job cannot start for a real reason (the old round of the track still runs): the refusal shows
+    /// for BOTH rows with its reason; the rule that the second row shows no refusal for the job that the first row started does not hide a refusal.
+    #[test]
+    fn retry_all_shows_the_refusal_of_a_track_that_cannot_start_for_a_real_reason() {
+        let (doc, a) = on_two_rows();
+        set_fail(&a, firstopen::Fail::Read);
+        a.life.in_round.store(true, Ordering::SeqCst); // the old round of the track is in fact still running
+        let r = doc.retry_rows(&["q7".to_string(), "q9".to_string()]);
+        assert_eq!(r["started"], json!([]), "no job starts: {r}");
+        let refused = r["refused"].as_array().unwrap();
+        assert_eq!(refused.len(), 2, "both rows show the refusal: {r}");
+        for (row, id) in refused.iter().zip(["q7", "q9"]) {
+            assert_eq!(row["id"], json!(id), "{r}");
+            assert!(
+                row["reason"].as_str().unwrap().contains("still working"),
+                "the reason shows: {r}"
+            );
+        }
+        assert_eq!(
+            a.life.retry_at.load(Ordering::SeqCst),
+            0,
+            "nothing was marked as started"
+        );
+        // the round ends: the same press starts the track once and the second row shows no refusal
+        a.life.in_round.store(false, Ordering::SeqCst);
+        let ok = doc.retry_rows(&["q7".to_string(), "q9".to_string()]);
+        assert_eq!(ok["started"], json!(["q7", "q9"]), "{ok}");
+        assert_eq!(ok["refused"], json!([]), "{ok}");
     }
 
     /// #593 round 2 (S2): a row that holds a failed source and a done one counts as started when the failed one was started in this press.

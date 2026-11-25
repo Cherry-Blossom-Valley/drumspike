@@ -2417,7 +2417,10 @@ unsafe extern "C" fn g_set_parent(p: *const clap_plugin, window: *const clap_win
             }),
         };
         match made {
-            Ok(()) => true,
+            Ok(()) => {
+                plugin.note_attached(); // #599
+                true
+            }
             Err(e) => {
                 eprintln!("drumspike-ara: {e}");
                 session().log(json!({"event": "editor_failed", "error": e}).to_string());
@@ -2442,6 +2445,7 @@ unsafe extern "C" fn g_destroy(p: *const clap_plugin) {
             if let Some(ed) = plugin.editor.borrow().as_ref() {
                 ed.detach();
             }
+            plugin.note_detached(); // #599: the last editor of the document closing lets the worker remove the audio sets
             session().write_out();
         }
     })

@@ -270,3 +270,48 @@ My reading: option 1, because it needs no new number and the render after an ope
 - The stage `export-rows-unload` asks for exactly 2 guards (the request thread of the page and the export itself). The fault run `no-thread-guard` removes the first and the stage
   sees 1. The stage cannot see a thread that runs after the unload with no guard at all.
 - A poll after the document closed answers 503. The unit test of the entry "*" of the gate (#593) is coverage of behaviour that existed; it changes nothing.
+
+## Round 4 (#599: the disk space, the Export press in flight, the unload)
+
+Decisions of the coordinator, option 1 of the proposal above.
+
+- Disk space. The plugin counts the open editors of a document (a plugin instance counts once, from `gui.set_parent` to `gui.destroy`, and again when the instance goes). When the
+  last one closes, the worker of the preparation (never the main thread: the close does no file work) removes the prepared AUDIO sets (spike wav, audio spike wav) of `Exports/.prepared/`
+  and does not make them again while no editor is open. MIDI sets and the merged file stay. At the unload the worker removes them too, after it let a running export or take end (at most
+  3 s; the export stops at its next checkpoint).
+- What is never removed: a set that a take or an export holds (a counter of holds per document: the removal tries again at the next tick, 150 ms), a file of `Exports/Dragged/` (not
+  touched at all: it holds the link or the copy of a drag), and a set that the worker writes (the removal runs on the worker thread, between two jobs). The sets leave the books FIRST,
+  under the lock, so no handle says "ready" for a file that is going, and a take or an export that starts at that moment finds the set missing and waits (the 409 "preparing" path):
+  a removed set is never delivered as a broken or empty file.
+- How it is removed: by the exact paths that the books hold for the plugin's own sets, only when the parent is the plugin's own `.prepared/` and the entry is a regular file
+  (`symlink_metadata`: a link is not followed and not counted). No pattern, no recursion. A failed removal is logged (`prepare_release_failed`) and harmless: the next pass of the worker removes
+  every file that no ready set holds.
+- The next open. `used` (the first use of a wav kind) stays remembered, so the first editor that opens makes the kinds again by itself, at once (no quiet time, no press); the handles
+  say "preparing" until then. The watchdog counts from the open, not from the removal. The plugin writes the rows `prepare_released` (why `closed` or `unload`, files removed, bytes,
+  failures, ms) and `prepare_reopened` (sets, ms from the open until every wanted audio set is ready again).
+- Stage `deliver`, run `close`: two editor cycles, no press in the second; the host reads the prepared folder from the disk: with the editor open 4 wav sets and 3 MIDI files; after the
+  close 0 wav files and 3 MIDI files; after the next open 4 wav sets again. Fault runs `no-release` (the sets stay) and `no-reopen` (they never come back). Unit tests: the close and
+  the open, a set under a running export or a take, exact names and no link followed, the unload, a long closed time (no watchdog error), and the fault runs.
+- Press of Export while the plan call is in flight: the page keeps the running call (`EX.infoRun`) and Export awaits it, so the count on the screen is the new one before any file is
+  replaced (page test with a real 400 ms delay of the plan call; it fails without the fix).
+- Unload, the true guarantee. NOT built, a known limit: an answer of the page that was posted to the main queue BEFORE the unload began can still be queued when the DAW unloads the
+  library. The posted closure is code of this library, and the unload runs on the main thread, so the queue cannot run before the unload returns. A generation counter that the closure
+  checks first does not help (the code that checks it is already the library's code), and there is nothing to drain: the plugin cannot run the main queue from inside the unload call
+  without running arbitrary code of the host there. What the plugin does is as in round 3: an export (the one command with a long-running thread) is counted and waited for, and its answer
+  is posted only while the unload has not begun. For all other commands (they answer in milliseconds) the window between the post and the run of the closure on the main thread is the
+  limit. A way to close it for good (not built: it changes the life of the library) is to keep the library mapped (`RTLD_NODELETE`), which is a decision of the owner.
+- A unit test of "Retry all" for a track that cannot start for a real reason (the old round still runs): both rows show the refusal with its reason.
+
+### Round 4, round 2 (review of deea184)
+
+- Grace period (M1). The removal does not run at the close. It runs when no editor was open for 60 s (`GRACE`; the scenario `DS_ARA_PREPARE_GRACE_MS` shortens it in a gate build). An open inside the period cancels it with no file touched and no state changed: the
+  handles stay ready, nothing is made again. At the unload and at the teardown of the document the removal runs at once. Unit tests with injected time (close and open after 100 ms, 1 s, 10 s: same files, same times, no job; close and
+  61 s: removed); stage run `close-quick` (the editor opens again after 600 ms inside a 5 s period: the same files); fault run `no-grace` fails it.
+- The count and the flags live in one place (`Prep`, under one lock). An editor that was shown before the document was known is counted at the bind (`Plugin.shown`). A press on a handle, a take and an export with `start` prove an editor: they cancel a release
+  that the count missed and start the grace period again from now when no editor is counted.
+- The hold of `take` has a test (`slow-take` makes the window; fault run `no-hold` loses the file). The unload waits for a hold at most 1.5 s and removes for at most 1 s, so the worker ends inside the 4 s of `stop_all`; what a hold or the deadline
+  leaves is removed by `clean_prepared` at the next open of that project.
+- Teardown: when the preparation is freed (the last plugin instance of the document is destroyed, perhaps inside a tick of the worker) the audio sets of the books are removed by their exact paths on the calling thread (see the measure in the report of #599).
+- A changed prepared folder (the project moved): the audio sets of the OLD folder are removed first, by the exact paths of the books, with the same checks against the old folder. MIDI files there stay. In the plugin the project folder of a document is fixed
+  (`documents/<id>/project`), so this is a guard that should not fire; it has a unit test.
+- Links: the tests prove a link IN PLACE OF a set file (it stays, its target is untouched). A set folder that is itself a link is not a case: the plugin removes by the exact path of a file and never lists or enters a folder.
