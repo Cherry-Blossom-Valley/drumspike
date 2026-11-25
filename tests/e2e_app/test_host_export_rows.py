@@ -70,14 +70,14 @@ def test_a_press_of_export_inside_the_150_ms_runs_the_waiting_plan_call_first_an
     open_dialog(host)
     host.wait_for_function("() => window.__calls.some(c => c[0] === 'plan') && document.querySelector('#exReplace').textContent === '2 files will be replaced'")
     host.evaluate("""() => { EX.tempoAck = true; window.__calls = [];
-      B.deliverPlan = async (items, dest) => { window.__calls.push(['plan', items.length]); return { files: [], replace: 7, dest }; };
+      B.deliverPlan = async (items, dest) => { window.__calls.push(['plan', items.length]); await new Promise(r => setTimeout(r, 50)); window.__calls.push(['planned']); return { files: [], replace: 7, dest }; };   // a real delay: the export must wait for the answer
       const o = B.deliverExport;
       B.deliverExport = async (items, dest, start) => { window.__calls.push(['press', document.querySelector('#exReplace').textContent]); return o(items, dest, start); };
       document.querySelector('#exSpikeBoth').click();   // an option change: its plan call is waiting
       document.querySelector('#exGo').click(); }""")   # Export in the same task: inside the 150 ms
     host.wait_for_function("() => EX.done > 0 && !EX.busy")
     seen = host.evaluate("() => window.__calls.map(c => c[0])")
-    assert seen == ["plan", "press", "export"], f"the waiting plan call ran first: {seen}"
+    assert seen == ["plan", "planned", "press", "export"], f"the waiting plan call was answered before Export ran: {seen}"
     assert calls(host, "press")[0][1] == "7 files will be replaced", "the count on the screen when the files are written is the new one"
     # the dialog in the quiet state: no plan call is pending, Export does not call the plan again
     host.wait_for_function("() => window.__calls.some(c => c[0] === 'plan')")   # the plan call that the finished export asked for has run: nothing is pending

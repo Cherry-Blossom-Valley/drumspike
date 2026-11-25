@@ -118,10 +118,37 @@ impl Drop for ExportLive {
     }
 }
 
+/// #597 round 2: the answer of an export is posted to the main queue only while the unload has not begun. `stop_all` closes the gate under the same lock, so no
+/// answer closure of the library is posted after the unload started (the page is gone then); a load of the library opens it again.
+static POST_CLOSED: Mutex<bool> = Mutex::new(false);
+
+/// Runs `post` (the post of an answer to the main queue) when the unload has not begun; false when it has (nothing is posted).
+pub fn post_unless_unloading(post: impl FnOnce()) -> bool {
+    let closed = POST_CLOSED.lock().unwrap_or_else(|e| e.into_inner());
+    if *closed {
+        return false;
+    }
+    post();
+    true
+}
+
+/// A load of the library: no stop sign and an open gate (a process that unloaded the library and loads it again).
+pub fn reset_stop() {
+    STOP.store(false, std::sync::atomic::Ordering::SeqCst);
+    *POST_CLOSED.lock().unwrap_or_else(|e| e.into_inner()) = false;
+}
+
+/// The guard of the request thread of an export; none under the fault run `no-thread-guard` (a gate build only), which the stage sees in the count.
+#[must_use]
+pub fn thread_guard() -> Option<ExportLive> {
+    (!has("no-thread-guard")).then(ExportLive::new)
+}
+
 /// The plugin library is about to be unmapped: every worker thread of the preparation and every running export of the dialog stops (a copy stops at its
 /// next checkpoint: between two pieces of 1 MiB, and before the first rename; its temporary files are removed). Waits at most `wait` for them; true when
 /// none runs.
 pub fn stop_all(wait: Duration) -> bool {
+    *POST_CLOSED.lock().unwrap_or_else(|e| e.into_inner()) = true;
     STOP.store(true, std::sync::atomic::Ordering::SeqCst);
     let t0 = Instant::now();
     // the fault run `no-export-wait` (a gate build only): the unload does not wait for a running export (the state before #597)
@@ -1297,6 +1324,9 @@ impl Prep {
     fn quick_preparing(&self, items: &[Value]) -> Option<String> {
         if has("stale-ok") || has("no-quick-poll") {
             return None;
+        }
+        if self.page.service().is_none() || self.page.sid().is_none() {
+            return None; // the document is closed: the full check answers 503
         }
         let rows = self.rows_now();
         let ids: Vec<&str> = rows.rows.iter().map(|r| r.id.as_str()).collect();
@@ -3325,6 +3355,42 @@ mod tests {
         assert!(ready(&prep).iter().all(|s| s == "ready"), "{:?}", ready(&prep));
         assert!(prep.export_to(&items, &dest, &[], false).is_ok(), "open again");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// #597 round 2 (N6): the poll of a waiting export after the document closed answers 503, not "preparing" from the books.
+    #[test]
+    fn a_poll_after_the_document_closed_answers_503() {
+        let _serial = serial();
+        let (svc, sid, root) = many_tracks("pollclosed", 3, 3.5, 5);
+        let prep = prep_many(&svc, &sid, &root, 3, 3.5);
+        prep.cycle(true, true);
+        prep.lock().used = [true, false];
+        prep.cycle(true, false);
+        let dest = root.join("out");
+        std::fs::create_dir_all(&dest).unwrap();
+        let spikes: Vec<Value> = (0..3).map(|k| it(&format!("q{k}"), "spike")).collect();
+        assert_eq!(prep.export_to(&spikes, &dest, &[], false).unwrap_err().code, 409);
+        prep.page.set(None);
+        let e = prep.export_to(&spikes, &dest, &[], false).unwrap_err();
+        assert_eq!((e.code, e.text.as_str()), (503, "the document is closed"));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// #597 round 2 (S5 a): once the unload began nothing is posted to the main queue; a load of the library opens the gate again.
+    #[test]
+    fn no_answer_is_posted_after_the_unload_began_and_a_load_opens_the_gate() {
+        let _serial = serial();
+        let _one = SERIAL.lock().unwrap_or_else(|e| e.into_inner());
+        let posted = std::cell::Cell::new(0);
+        reset_stop(); // other tests of the process have stopped before
+        assert!(post_unless_unloading(|| posted.set(posted.get() + 1)));
+        stop_all(Duration::from_millis(50));
+        assert!(!post_unless_unloading(|| posted.set(posted.get() + 1)), "closed");
+        assert_eq!(posted.get(), 1);
+        reset_stop();
+        assert!(!stopped(), "a load starts with no stop sign");
+        assert!(post_unless_unloading(|| posted.set(posted.get() + 1)));
+        assert_eq!(posted.get(), 2);
     }
 
     /// #597: a stop that comes between the last copy and the first rename (the last checkpoint) writes nothing either.

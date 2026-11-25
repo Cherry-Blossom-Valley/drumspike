@@ -8459,9 +8459,9 @@ def export_rows_unload_parts(d: dict) -> dict:
     tmps = [f.name for f in exports.glob(".*.tmp")] if exports.is_dir() else []
     sig = (r.get("unload") or {}).get("signal_ms")
     before = r.get("before") or {}
-    return {"export-rows-unload": (isinstance(sig, int) and sig >= 0 and before.get("copied") is False and (row.get("exports_at_start") or 0) >= 1
+    return {"export-rows-unload": (isinstance(sig, int) and sig >= 0 and before.get("copied") is False and row.get("exports_at_start") == 2
                                    and row.get("exports_after") == 0 and row.get("ended") is True and (row.get("ms") or 99999) < 4000 and not written and not tmps,
-                                   f"the library was unloaded while a copy ran (signal after {sig} ms, false before the press: {before.get('copied')}): the unload saw {row.get('exports_at_start')} export guard(s) (the request thread and the export itself), "
+                                   f"the library was unloaded while a copy ran (signal after {sig} ms, false before the press: {before.get('copied')}): the unload saw {row.get('exports_at_start')} export guard(s) (want 2: the request thread of the page and the export itself), "
                                    f"waited {row.get('ms')} ms (limit 4000), {row.get('exports_after')} still ran after it (want 0), ended {row.get('ended')}; files written {written}, temporary files {tmps}")}
 
 
@@ -8482,6 +8482,8 @@ def stage_export_rows_fault() -> bool:
     ok = fault_part("export-rows-fault-no-late-check", export_rows_late_parts(d), "export-rows-late", "the hits are not checked again after the copy: the old files are delivered although a hit changed")
     d = export_rows_run("fault-no-signal", {"DS_ARA_PREPARE_FAULT": "slow-copy,no-copied-signal"}, late=True)
     ok = fault_part("export-rows-fault-no-signal", export_rows_late_parts(d), "export-rows-late", "the plugin never says that the copy is done: the stage finds no signal and does not edit at a guessed time") and ok
+    d = export_rows_run("fault-no-thread-guard", {"DS_ARA_PREPARE_FAULT": "slow-copy-long,no-thread-guard"}, unload=True)
+    ok = fault_part("export-rows-fault-no-thread-guard", export_rows_unload_parts(d), "export-rows-unload", "the request thread of the export is not counted: the unload sees one guard, not two") and ok
     d = export_rows_run("fault-no-export-wait", {"DS_ARA_PREPARE_FAULT": "slow-copy-long,no-export-wait"}, unload=True)
     ok = fault_part("export-rows-fault-no-export-wait", export_rows_unload_parts(d), "export-rows-unload", "the unload does not wait for a running copy (the state before #597): a thread of the export still runs after it") and ok
     for label, env, part, what in (

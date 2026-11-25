@@ -200,7 +200,7 @@ function exInfo() {
   if (EX.infoNow) { EX.infoNow = false; return exInfoRun(); }   // the dialog just opened: the first call is not delayed
   clearTimeout(EX.infoTimer);
   return new Promise(ok => {
-    EX.infoFlush = () => { clearTimeout(EX.infoTimer); EX.infoFlush = null; ok(exInfoRun()); };   // #597: Export runs it at once when it comes inside the 150 ms
+    EX.infoFlush = () => { clearTimeout(EX.infoTimer); EX.infoFlush = null; const run = exInfoRun(); ok(run); return run; };   // #597: Export runs it at once when it comes inside the 150 ms
     EX.infoTimer = setTimeout(EX.infoFlush, 150);
   });
 }

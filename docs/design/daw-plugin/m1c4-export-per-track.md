@@ -256,3 +256,17 @@ Measured (release build, 12 tracks of 10 minutes at 48 kHz, 700 hits each): the 
    tracks), which breaks the rule of M1c3 that a handle is ready before the user asks. Risk: high for the feel; the disk use is the lowest.
 
 My reading: option 1, because it needs no new number and the render after an open is short. Option 2 is the one to add if the user wants the sets to stay across sessions.
+
+### Round 3, second read (review of 8b19470)
+
+- Press of Export inside the 150 ms: `infoFlush` returns the promise of the plan call and Export awaits it, so the files are replaced after the new count is on the screen (the
+  page test answers the plan call after 50 ms).
+- Unload order: the rounds of the documents are cancelled first, then the wait for the exports and the preparation workers (4 s), then the worker of the rounds. An export that
+  waits for a service lock that a round holds can then end inside the 4 s.
+- What is true after the unload: the wait is bounded. A thread that still runs after 4 s keeps running (the plugin cannot stop a thread); the report row `prepare_unloaded` says
+  `ended: false` and the count after. The stop sign stays set after an unload; a load of the library in the same process (`entry.init`) resets it and opens the post gate.
+- The answer of an export is posted to the main queue only while the unload has not begun: `stop_all` closes the gate under the same lock as the post, and the guard of the
+  request thread drops after the post. Answers of other commands are posted as before (not changed here).
+- The stage `export-rows-unload` asks for exactly 2 guards (the request thread of the page and the export itself). The fault run `no-thread-guard` removes the first and the stage
+  sees 1. The stage cannot see a thread that runs after the unload with no guard at all.
+- A poll after the document closed answers 503. The unit test of the entry "*" of the gate (#593) is coverage of behaviour that existed; it changes nothing.
