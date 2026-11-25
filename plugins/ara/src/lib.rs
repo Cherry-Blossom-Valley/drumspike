@@ -7138,8 +7138,9 @@ mod tests {
         let (doc, _a, _b) = first_open_doc();
         unsafe {
             let clap = f_create(std::ptr::null(), std::ptr::null(), PLUGIN_ID);
-            assert!(!clap.is_null());
-            let plugin: &Plugin = &*((*clap).plugin_data as *mut Plugin);
+            // checked reads of both pointers: the factory answers null when it refuses, and a plugin without its data is no plugin
+            let data = clap.as_ref().expect("the factory made the plugin").plugin_data;
+            let plugin: &Plugin = data.cast::<Plugin>().as_ref().expect("the plugin has its data");
             plugin.note_attached(); // gui.set_parent: the window is up, the document is not known
             assert!(doc.prep.get().is_none_or(|p| p.open_editors() == 0), "not counted yet");
             *plugin.doc.lock().unwrap() = Some(doc.clone()); // the bind
