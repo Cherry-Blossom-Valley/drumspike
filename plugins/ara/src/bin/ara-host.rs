@@ -2670,6 +2670,15 @@ fn run_restore_readd(bundle: &str, files: &[String], rest: &[String]) -> i32 {
     }
 }
 
+/// Whether the plugin's report file (`DS_ARA_OUT`, rewritten atomically) holds a row of this event.
+fn report_has_row(event: &str) -> bool {
+    let Some(path) = std::env::var("DS_ARA_OUT").ok().filter(|p| !p.is_empty()) else {
+        return false;
+    };
+    let needle = format!("\"event\":\"{event}\"");
+    std::fs::read_to_string(path).is_ok_and(|t| t.lines().any(|l| l.contains(&needle)))
+}
+
 /// `restore-busy`: another document starts a long analysis (`--busy synth:<secs>...`), then
 /// this one restores `--archive` and stores at once (a host autosave right after the
 /// restore); the archive goes to `--out`. The process leaves without closing anything.
@@ -2687,7 +2696,18 @@ fn run_restore_busy(bundle: &str, files: &[String], rest: &[String]) -> i32 {
             let loaded = load(bundle)?;
             let mut other = HostDoc::new(&loaded)?;
             other.add_and_request(&busy, "busy")?;
-            std::thread::sleep(Duration::from_millis(1200));
+            // #583 (the same pattern as `editor-refuse`): wait for the row that says the worker took the round of the other
+            // document (false before the request above, bounded, with a time limit text), not for a fixed 1.2 s
+            let waited = Instant::now();
+            while !report_has_row("round_start") {
+                if waited.elapsed() > Duration::from_secs(30) {
+                    return Err(
+                        "time limit: the plugin wrote no round_start row for the busy document within 30 s".into(),
+                    );
+                }
+                pump(other.inst);
+                std::thread::sleep(Duration::from_millis(20));
+            }
             let mut d = HostDoc::with_archive(&loaded, archive)?;
             let (pairs, base) = d.add_only(files, "restore")?;
             println!("{{\"event\":\"host_restore\",\"unix_ns\":{}}}", unix_ns());

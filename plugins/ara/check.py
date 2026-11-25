@@ -5220,13 +5220,26 @@ def stage_editor_follow_fault() -> bool:
 
 
 def stage_editor_refuse() -> bool:
-    rc, summary, rows = run_phase("editor-refuse", "refuse", CLAP, args=["--late-files", EXTRA_SYNTH])
-    return print_parts("", refuse_parts(rc, rows))
+    """The page's commands that change the track set are refused, and a later round of the DAW still runs. #583: the host
+    ends the run only after it added the late file and saw the row of that round (the row lists every source), never at
+    the report of the page. The second run blinds the trigger of the late file for 1.5 s, so the report of the page is there at the end of the
+    loop turn but not yet at the trigger (the order of events that a loaded machine gives now and then)."""
+    ok = True
+    for label, extra, tag in (("editor-refuse", [], ""), ("editor-refuse-late-trigger", ["--trigger-blind-ms", "1500"], "-late-trigger")):
+        rc, summary, rows = run_phase(label, "refuse", CLAP, args=["--late-files", EXTRA_SYNTH, *extra])
+        ok = print_parts(tag, refuse_parts(rc, rows)) and ok
+    return ok
 
 
 def stage_editor_refuse_fault() -> bool:
     rc, summary, rows = run_phase("editor-fault-refuse", "refuse", CLAP, {"DS_ARA_EDITOR_FAULT": "allow-track-set"}, ["--late-files", EXTRA_SYNTH])
-    return fault_part("editor-refuse-fault", refuse_parts(rc, rows), "editor-refuse", "the page may change the track set")
+    ok = fault_part("editor-refuse-fault", refuse_parts(rc, rows), "editor-refuse", "the page may change the track set")
+    # #583: the host ends at the page's report, as before; with the blind trigger the report is always seen by the end first, so the later round never runs
+    rc, summary, rows = run_phase("editor-fault-refuse-late", "refuse", CLAP, args=["--late-files", EXTRA_SYNTH, "--trigger-blind-ms", "1500", "--end-on-report"])
+    good, ev = refuse_parts(rc, rows)["editor-refuse"]
+    jobs = job_rows_of(rows)
+    named = not good and "(not 403: [])" in ev and len(jobs) < 2
+    return pass_fail("editor-refuse-fault-late", named, f"the fault run (the host ends at the report, so the later round is not waited for) fails for the later round alone: {ev}") and ok
 
 
 def race_run(label: str, env: dict | None = None) -> dict:
