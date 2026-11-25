@@ -134,6 +134,16 @@ def test_a_request_of_the_state_that_never_answers_ends_and_the_poll_goes_on(hos
     host.evaluate("() => { HST.reqMs = 5000; clearTimeout(HST.poll); }")
 
 
+def test_an_answer_that_comes_after_the_limit_is_still_used_when_it_is_newer(host):
+    """#593 round 2 (N9): a slow plugin must still update the page."""
+    rows = [row("q1", "Kick In", "analysing", "Kick In: analysing", [K])]
+    give(host, payload(rows, "analysing", "Analysing: 0 of 1 track.", gen=3))
+    newer = payload(rows, "analysing", "Analysing: 0 of 1 track.", gen=4)
+    host.evaluate("""async p => { clearTimeout(HST.poll); HST.reqMs = 80; B.hostStates = () => new Promise(ok => setTimeout(() => ok(p), 300)); await HST.pull(); }""", newer)
+    host.wait_for_function("() => HST.st.gen === 4")
+    host.evaluate("() => { HST.reqMs = 5000; clearTimeout(HST.poll); }")
+
+
 def test_a_state_change_is_written_once_not_at_every_poll(host):
     rows = [row("q1", "Kick In", "analysing", "Kick In: analysing", [K])]
     give(host, payload(rows, "analysing", "Analysing: 0 of 1 track."))

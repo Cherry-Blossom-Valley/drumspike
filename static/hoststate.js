@@ -50,8 +50,12 @@ HST.pull = function () {
   let timer;
   const limit = new Promise((_, no) => { timer = setTimeout(() => no({ timeout: true }), HST.reqMs); });
   // a host that does not answer the command (an older plugin, a bridge without it): the page keeps its own texts and shows no line
-  return Promise.race([B.hostStates(), limit]).then(p => { clearTimeout(timer); return HST.take(p); }, e => {
-    clearTimeout(timer);
+  const req = B.hostStates();
+  let late = false;
+  // N9: an answer that comes after the limit is still used (HST.take drops it when an older one); else a slow plugin would never update the page
+  Promise.resolve(req).then(p => { if (late) HST.take(p); }, () => {});
+  return Promise.race([req, limit]).then(p => { clearTimeout(timer); return HST.take(p); }, e => {
+    clearTimeout(timer); late = !!(e && e.timeout);
     if (!HST.st && !(e && e.timeout)) { HST.absent = true; HST.paint(); }   // a slow plugin is not an absent one
     HST.schedule();   // S2: one rejected answer, or one that never came, does not end the poll
     return false;

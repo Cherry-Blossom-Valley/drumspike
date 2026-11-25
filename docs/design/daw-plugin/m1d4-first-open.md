@@ -324,3 +324,12 @@ reached). The standalone stage `standalone-diff` is expected to pass on this tic
 - The state request of the page ends after 5 s without an answer (`HST.reqMs`); the poll goes on and the page does not call the plugin absent for it.
 - The handle gate with the entry for all rows (`*`, the state path failed) has a unit test of the producer: every handle and the merged file are preparing, the export of the dialog
   and a take are refused, and they open again when the entry goes.
+
+### Round 3, second read (review of 8b19470)
+
+- "Retry all": a row counts as started when every source of it that is failed or offline was started in this press (a done source beside it does not matter).
+- The analysis clock neither starts nor runs while a round of the track is deferred (the wait is not analysis time); a clock left over is cleared and starts again at the first read
+  after the wait.
+- The mark `deferred` ends for a source that the worker leaves out of a round and for a source that was removed while its round waited.
+- A state answer that comes after the 5 s limit is still used when it is newer than the last one (`HST.take` drops an older one).
+- The unit test of the handle gate with the entry for all rows covers behaviour that existed before; it changes nothing.
