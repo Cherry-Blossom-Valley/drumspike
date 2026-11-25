@@ -199,7 +199,10 @@ function exInfo() {
   if (!hostMode()) return exInfoRun();
   if (EX.infoNow) { EX.infoNow = false; return exInfoRun(); }   // the dialog just opened: the first call is not delayed
   clearTimeout(EX.infoTimer);
-  return new Promise(ok => { EX.infoTimer = setTimeout(() => ok(exInfoRun()), 150); });
+  return new Promise(ok => {
+    EX.infoFlush = () => { clearTimeout(EX.infoTimer); EX.infoFlush = null; ok(exInfoRun()); };   // #597: Export runs it at once when it comes inside the 150 ms
+    EX.infoTimer = setTimeout(EX.infoFlush, 150);
+  });
 }
 async function exInfoRun() {   // the replace count of the current options (the newest answer wins)
   const my = ++EX.infoSeq;
@@ -381,6 +384,9 @@ async function askDefaultTempo() {
 async function exRun() {
   if (EX.busy || $("#exGo").disabled) return;
   EX.busy = true;   // set before the notice: while it asks, exClose (Escape) is refused
+  /* #597: a press of Export inside the 150 ms of an option change runs the waiting plan call first: the dialog shows the replace count of the options it exports with
+     before any file is replaced (the count on the screen was the old one) */
+  if (hostMode() && EX.infoFlush) await EX.infoFlush();
   /* #151: a MIDI export with no tempo set uses the default 120 BPM: ask before the first export writes */
   if (EX.midi && !EX.tempoAck) {
     const a = await askDefaultTempo();

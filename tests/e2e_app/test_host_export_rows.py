@@ -64,6 +64,30 @@ def test_the_dialog_lists_daw_tracks_and_exports_one_item_per_track_and_kind(hos
     assert "3 MIDI and 3 spike files" in msg and "1 in no playback region, 2 before the song start" in msg, msg
 
 
+def test_a_press_of_export_inside_the_150_ms_runs_the_waiting_plan_call_first_and_shows_its_count(host):
+    """#597: the plan call of an option change waits 150 ms; an Export inside that time used to run with the OLD replace count on the screen."""
+    give(host, payload(spike=S_READY, audio=S_READY, used={"spike": True, "audio": True}))
+    open_dialog(host)
+    host.wait_for_function("() => window.__calls.some(c => c[0] === 'plan') && document.querySelector('#exReplace').textContent === '2 files will be replaced'")
+    host.evaluate("""() => { EX.tempoAck = true; window.__calls = [];
+      B.deliverPlan = async (items, dest) => { window.__calls.push(['plan', items.length]); return { files: [], replace: 7, dest }; };
+      const o = B.deliverExport;
+      B.deliverExport = async (items, dest, start) => { window.__calls.push(['press', document.querySelector('#exReplace').textContent]); return o(items, dest, start); };
+      document.querySelector('#exSpikeBoth').click();   // an option change: its plan call is waiting
+      document.querySelector('#exGo').click(); }""")   # Export in the same task: inside the 150 ms
+    host.wait_for_function("() => EX.done > 0 && !EX.busy")
+    seen = host.evaluate("() => window.__calls.map(c => c[0])")
+    assert seen == ["plan", "press", "export"], f"the waiting plan call ran first: {seen}"
+    assert calls(host, "press")[0][1] == "7 files will be replaced", "the count on the screen when the files are written is the new one"
+    # the dialog in the quiet state: no plan call is pending, Export does not call the plan again
+    host.wait_for_function("() => window.__calls.some(c => c[0] === 'plan')")   # the plan call that the finished export asked for has run: nothing is pending
+    host.wait_for_timeout(300)
+    host.evaluate("() => { window.__calls = []; EX.done = 0; }")
+    host.locator("#exGo").click()
+    host.wait_for_function("() => EX.done > 0 && !EX.busy")
+    assert host.evaluate("() => window.__calls.map(c => c[0])") == ["press", "export"]
+
+
 def test_the_spike_types_the_single_file_and_the_selected_track(host):
     give(host, payload(spike=S_READY, audio=S_READY, used={"spike": True, "audio": True}))
     open_dialog(host)
