@@ -2651,6 +2651,9 @@ mod tests {
             .unwrap();
         svc.events_set(&sid, "sub", &json!([{"t": 0.5, "v": 100}])).unwrap();
         let prep = prep_of(&svc, &sid, &root);
+        // no worker thread: the test makes every pass itself (a worker that `export_to(.., true)` wakes would run its own pass next to the explicit ones and race
+        // for the temporary file of a set: "write failed: No such file or directory", seen once in 12 runs)
+        prep.lock().started = true;
         prep.cycle(true, true);
         let dest = root.join("out");
         std::fs::create_dir_all(&dest).unwrap();

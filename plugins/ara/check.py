@@ -8459,9 +8459,9 @@ def export_rows_unload_parts(d: dict) -> dict:
     tmps = [f.name for f in exports.glob(".*.tmp")] if exports.is_dir() else []
     sig = (r.get("unload") or {}).get("signal_ms")
     before = r.get("before") or {}
-    return {"export-rows-unload": (isinstance(sig, int) and sig >= 0 and before.get("copied") is False and row.get("exports_at_start") == 1
+    return {"export-rows-unload": (isinstance(sig, int) and sig >= 0 and before.get("copied") is False and (row.get("exports_at_start") or 0) >= 1
                                    and row.get("exports_after") == 0 and row.get("ended") is True and (row.get("ms") or 99999) < 4000 and not written and not tmps,
-                                   f"the library was unloaded while a copy ran (signal after {sig} ms, false before the press: {before.get('copied')}): the unload saw {row.get('exports_at_start')} export(s), "
+                                   f"the library was unloaded while a copy ran (signal after {sig} ms, false before the press: {before.get('copied')}): the unload saw {row.get('exports_at_start')} export guard(s) (the request thread and the export itself), "
                                    f"waited {row.get('ms')} ms (limit 4000), {row.get('exports_after')} still ran after it (want 0), ended {row.get('ended')}; files written {written}, temporary files {tmps}")}
 
 
