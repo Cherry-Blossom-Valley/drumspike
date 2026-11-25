@@ -244,6 +244,8 @@ struct Life {
     in_round: AtomicBool,
     /// A press of Retry asked for this source: its round analyses only the sources that were asked for.
     retry_only: AtomicBool,
+    /// #593: a round of this source waits in the queue (a job of the page runs, or the service said 409): a press of Retry is refused while it waits.
+    deferred: AtomicBool,
 }
 
 impl Life {
@@ -257,6 +259,7 @@ impl Life {
             retry_at: AtomicU64::new(0),
             in_round: AtomicBool::new(false),
             retry_only: AtomicBool::new(false),
+            deferred: AtomicBool::new(false),
         }
     }
 }
@@ -297,19 +300,22 @@ fn clear_read_fail(s: &SourceState) {
 }
 
 /// M1d4: marks the sources of a round as in the round, and clears the mark whatever way the round ends.
-struct RoundFlag(Vec<Arc<SourceState>>);
+struct RoundFlag(Vec<Arc<SourceState>>, bool);
 
 impl RoundFlag {
-    fn set(list: Vec<Arc<SourceState>>) -> RoundFlag {
+    /// `retry`: the round is the Retry of some tracks (#593): it stamps the analysis clock of every track that takes part, so it clears the clock of every one of them
+    /// when it ends (a track that this round did not analyse would keep a clock that nothing ends, and fail as "took too long" at a later re-analysis).
+    fn set(list: Vec<Arc<SourceState>>, retry: bool) -> RoundFlag {
         for s in &list {
             s.life.in_round.store(true, Ordering::SeqCst);
-            // S3: the analysis clock of a source starts when its round starts (the wait for a job of the page does not count)
+            s.life.deferred.store(false, Ordering::SeqCst); // the round that waited runs now
+                                                            // S3: the analysis clock of a source starts when its round starts (the wait for a job of the page does not count)
             s.life.ready_at.store(now1(), Ordering::SeqCst);
         }
         if let Some(s) = list.first() {
             s.doc.states_changed();
         }
-        RoundFlag(list)
+        RoundFlag(list, retry)
     }
 }
 
@@ -317,6 +323,9 @@ impl Drop for RoundFlag {
     fn drop(&mut self) {
         for s in &self.0 {
             s.life.in_round.store(false, Ordering::SeqCst);
+            if self.1 {
+                s.life.ready_at.store(0, Ordering::SeqCst); // #593: the clock of every track of a Retry round ends with the round
+            }
         }
     }
 }
@@ -1328,6 +1337,34 @@ impl DocShared {
             let since = |t: u64| if t == 0 { 0 } else { now.saturating_sub(t) };
             let progress = s.life.read_progress.load(Ordering::SeqCst);
             let fail = *s.life.fail.lock().unwrap_or_else(|e| e.into_inner());
+            let done = s.has_events.load(Ordering::SeqCst)
+                && !s.analysis_failed.load(Ordering::SeqCst)
+                && !s.stale.load(Ordering::SeqCst)
+                && !s.reanalyse.load(Ordering::SeqCst);
+            // #593: a track that has its audio, is not done and never got a round (a restored track whose round never comes) has no analysis clock: it
+            // starts at the first read of the state, so that the row fails with a reason and a Retry after the limit instead of "analysing" for ever.
+            // A track that is done has no clock (a later re-analysis starts its own at its round).
+            let mut ready_at = s.life.ready_at.load(Ordering::SeqCst);
+            if s.life.deferred.load(Ordering::SeqCst) {
+                // a round of this track waits in the queue (up to 10 minutes): the wait is not analysis time, the clock neither starts nor runs (it starts again
+                // at the first read after the wait)
+                if ready_at != 0 && !s.life.in_round.load(Ordering::SeqCst) {
+                    s.life.ready_at.store(0, Ordering::SeqCst);
+                }
+                ready_at = 0;
+            } else if ready_at == 0 && wav && !done && fail.is_none() && !reading {
+                ready_at = match s
+                    .life
+                    .ready_at
+                    .compare_exchange(0, now, Ordering::SeqCst, Ordering::SeqCst)
+                {
+                    Ok(_) => now,
+                    Err(v) => v,
+                };
+            } else if ready_at != 0 && done && !s.life.in_round.load(Ordering::SeqCst) {
+                s.life.ready_at.store(0, Ordering::SeqCst);
+                ready_at = 0;
+            }
             let retry_at = s.life.retry_at.load(Ordering::SeqCst);
             let name = shown
                 .get(&format!("#{}", s.seq))
@@ -1342,16 +1379,13 @@ impl DocShared {
                     dup: false,
                     order: (i32::MAX, s.seq),
                     hits: s.notes.lock().map(|n| n.len()).unwrap_or(0),
-                    done: s.has_events.load(Ordering::SeqCst)
-                        && !s.analysis_failed.load(Ordering::SeqCst)
-                        && !s.stale.load(Ordering::SeqCst)
-                        && !s.reanalyse.load(Ordering::SeqCst),
+                    done,
                     wav,
                     reading,
                     read_idle_ms: since(progress),
                     read_retry: !wav && s.read_retry_at.lock().map(|t| t.is_some()).unwrap_or(false),
                     age_ms: s.life.born.elapsed().as_millis() as u64,
-                    analysing_ms: since(s.life.ready_at.load(Ordering::SeqCst)),
+                    analysing_ms: since(ready_at),
                     audio_s: if p.sample_rate > 0.0 {
                         p.sample_count as f64 / p.sample_rate
                     } else {
@@ -1506,6 +1540,9 @@ impl DocShared {
         let mut started: Vec<String> = Vec::new();
         let mut refused: Vec<Value> = Vec::new();
         let mut asked = 0usize;
+        // #593: the sources that this press started. A track that sits in two DAW track rows is in both: the second row is not refused for the job that the
+        // first row just started
+        let mut started_srcs: std::collections::HashSet<usize> = std::collections::HashSet::new();
         let mut targets: Vec<&String> = ids.iter().collect();
         let every: Vec<String> = rows.rows.iter().map(|r| r.id.clone()).collect();
         if all {
@@ -1522,15 +1559,36 @@ impl DocShared {
             }
             let mine: Vec<&(firstopen::SrcFact, Arc<SourceState>)> =
                 facts.iter().filter(|(f, _)| f.row == *id).collect();
-            let busy = mine
+            // a row counts as started when every source of it that needs a retry (failed or offline) was started in this press: a done source beside it does not matter
+            let needing: Vec<&&(firstopen::SrcFact, Arc<SourceState>)> = mine
                 .iter()
-                .any(|(_, s)| s.life.in_round.load(Ordering::SeqCst) || reader_running(s) || (live_press(s) && !all));
+                .filter(|(f, _)| {
+                    matches!(
+                        source_state_of(f, &lim),
+                        firstopen::State::Failed | firstopen::State::Offline
+                    )
+                })
+                .collect();
+            if !needing.is_empty() && !all && needing.iter().all(|(_, s)| started_srcs.contains(&s.seq)) {
+                started.push(id.clone()); // the same track started in this press: no refusal
+                continue;
+            }
+            let busy = mine.iter().any(|(_, s)| {
+                !started_srcs.contains(&s.seq)
+                    && (s.life.in_round.load(Ordering::SeqCst)
+                        || s.life.deferred.load(Ordering::SeqCst) // #593: a round of this track waits in the queue
+                        || reader_running(s)
+                        || (live_press(s) && !all))
+            });
             if busy && !all {
                 refused.push(json!({"id": id, "reason": "The plugin is still working on this track."}));
                 continue;
             }
             let mut any = false;
             for (f, s) in mine {
+                if started_srcs.contains(&s.seq) && !all {
+                    continue;
+                }
                 let in_state = matches!(
                     source_state_of(f, &lim),
                     firstopen::State::Failed | firstopen::State::Offline
@@ -1553,6 +1611,7 @@ impl DocShared {
                 *s.life.fail.lock().unwrap_or_else(|e| e.into_inner()) = None;
                 s.read_tries.store(0, Ordering::SeqCst);
                 any = true;
+                started_srcs.insert(s.seq);
                 s.life.retry_only.store(true, Ordering::SeqCst);
                 if has_wav(s) {
                     s.life.ready_at.store(now1(), Ordering::SeqCst);
@@ -2036,6 +2095,10 @@ fn defer_msg(msg: Msg) {
 /// The longest the unload of the library waits for the worker.
 const UNLOAD_WAIT: std::time::Duration = std::time::Duration::from_millis(1500);
 
+/// The longest the unload waits for the preparation of the files and for a running export of the dialog (#597). A copy stops at its next checkpoint
+/// (between two pieces of 1 MiB), so the wait is short unless the disk blocks one write; the main thread is blocked for at most this time, once, at the unload.
+const PREPARE_UNLOAD_WAIT: std::time::Duration = std::time::Duration::from_millis(4000);
+
 /// The report row of the services made and dropped in this process (written before the
 /// last service row, so that row stays the last line).
 fn services_row() -> String {
@@ -2116,6 +2179,27 @@ fn needs_analysis(s: &Arc<SourceState>) -> bool {
         && (!s.has_events.load(Ordering::SeqCst)
             || s.analysis_failed.load(Ordering::SeqCst)
             || s.reanalyse.load(Ordering::SeqCst))
+}
+
+/// The sources of a round that still need analysis. A source that is left out has no round that waits for it any more: its mark `deferred` ends (#593), or a later
+/// failure of the track would refuse every Retry for ever.
+fn keep_needing(list: Vec<Arc<SourceState>>) -> Vec<Arc<SourceState>> {
+    let (keep, dropped): (Vec<_>, Vec<_>) = list.into_iter().partition(needs_analysis);
+    for s in &dropped {
+        s.life.deferred.store(false, Ordering::SeqCst);
+    }
+    keep
+}
+
+/// A deferred round comes back to the queue: its sources ask again. A source that was removed meanwhile is not asked and its mark `deferred` ends (#593).
+fn requeue_deferred(requested: &mut Vec<Arc<SourceState>>, targets: Vec<Arc<SourceState>>) {
+    for s in targets {
+        if s.removed.load(Ordering::SeqCst) {
+            s.life.deferred.store(false, Ordering::SeqCst);
+        } else if !requested.iter().any(|r| Arc::ptr_eq(r, &s)) {
+            requested.push(s);
+        }
+    }
 }
 
 /// Take the sources of `doc` that need no analysis (they have their result) out of the queue.
@@ -2393,7 +2477,7 @@ impl Session {
                         .iter()
                         .position(|(d, _)| Arc::ptr_eq(d, &doc))
                         .map(|i| st.stale.remove(i).1);
-                    let targets: Vec<Arc<SourceState>> = list.into_iter().filter(needs_analysis).collect();
+                    let targets = keep_needing(list);
                     if doc.closing.load(Ordering::SeqCst) || (targets.is_empty() && reason.is_none()) {
                         continue; // nothing changed: no round
                     }
@@ -2417,6 +2501,9 @@ impl Session {
                         && doc.page.job_running()
                         && since.elapsed() < std::time::Duration::from_secs(600)
                     {
+                        for t in &targets {
+                            t.life.deferred.store(true, Ordering::SeqCst); // #593: Retry is refused while the round waits
+                        }
                         defer_msg(Msg::Defer {
                             doc: doc.clone(),
                             targets: targets.clone(),
@@ -2430,6 +2517,9 @@ impl Session {
                         && crate::test_switch("DS_ARA_ROUND_FAULT").as_deref() != Ok("no-page-wait");
                     if self.run_job(&doc, &targets, why, force, allow) {
                         // R4: the 409 after the short retry goes back to the queue like a job of the page
+                        for t in &targets {
+                            t.life.deferred.store(true, Ordering::SeqCst); // #593
+                        }
                         defer_msg(Msg::Defer {
                             doc: doc.clone(),
                             targets: targets.clone(),
@@ -2443,6 +2533,7 @@ impl Session {
                     st.current.clear();
                     for t in &targets {
                         t.life.retry_only.store(false, Ordering::SeqCst); // the round of the Retry ran (or failed): the next one is a normal round
+                        t.life.deferred.store(false, Ordering::SeqCst);
                     }
                     self.plan_retry(&doc, st);
                 }
@@ -2857,14 +2948,13 @@ impl Session {
                 since,
             } => {
                 if doc.closing.load(Ordering::SeqCst) {
+                    for s in &targets {
+                        s.life.deferred.store(false, Ordering::SeqCst);
+                    }
                     return false;
                 }
                 // back in the queue: the sources ask again, a round without sources is a stale mark
-                for s in targets {
-                    if !s.removed.load(Ordering::SeqCst) && !st.requested.iter().any(|r| Arc::ptr_eq(r, &s)) {
-                        st.requested.push(s);
-                    }
-                }
+                requeue_deferred(&mut st.requested, targets);
                 if !st.stale.iter().any(|(d, _)| Arc::ptr_eq(d, &doc)) {
                     st.stale.push((doc.clone(), reason));
                 }
@@ -2946,7 +3036,8 @@ impl Session {
         let snaps: Vec<service::SourceSnapshot> =
             members.iter().filter(|s| takes_part(s)).map(|s| s.snapshot()).collect();
         // M1d4: the sources of this round show as analysing until it ends, whatever way it ends
-        let _in_round = RoundFlag::set(members.iter().filter(|s| takes_part(s)).cloned().collect());
+        let retry_round = !targets.is_empty() && targets.iter().all(|t| t.life.retry_only.load(Ordering::SeqCst));
+        let _in_round = RoundFlag::set(members.iter().filter(|s| takes_part(s)).cloned().collect(), retry_round);
         let id_before = doc.id();
         self.log(
             json!({"event": "round_start", "doc": id_before, "reason": reason, "tracks": snaps.len(), "unix_ns": now_ns().to_string()})
@@ -3598,20 +3689,36 @@ fn unload_worker() {
     if crate::test_switch("DS_ARA_UNLOAD_FAULT").as_deref() == Ok("skip") {
         return;
     }
-    // the worker threads of the preparation of the files (M1c3) run library code too: they stop before the library can be unmapped
-    prepare::stop_all(UNLOAD_WAIT);
-    let Some(s) = SESSION.get() else { return };
-    let started = std::time::Instant::now();
-    let docs: Vec<Arc<DocShared>> = LIVE_DOCS
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .iter()
-        .filter_map(std::sync::Weak::upgrade)
-        .collect();
+    // the rounds are cancelled FIRST (#597 round 2): an export that waits on a service lock that a round holds can then end inside the wait below
+    let docs: Vec<Arc<DocShared>> = SESSION
+        .get()
+        .map(|_| {
+            LIVE_DOCS
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .iter()
+                .filter_map(std::sync::Weak::upgrade)
+                .collect()
+        })
+        .unwrap_or_default();
     for d in &docs {
         d.closing.store(true, Ordering::SeqCst);
         d.canceller.cancel();
     }
+    // the worker threads of the preparation of the files (M1c3) run library code too: they stop before the library can be unmapped
+    let (exports_at_start, t0) = (prepare::live_exports(), std::time::Instant::now());
+    let prepare_ended = prepare::stop_all(PREPARE_UNLOAD_WAIT);
+    // a row for the check: how many exports ran at the unload, how long it waited, and how many still run after it
+    if exports_at_start > 0 || !prepare_ended {
+        session().log(
+            json!({"event": "prepare_unloaded", "ended": prepare_ended, "exports_at_start": exports_at_start,
+                "exports_after": prepare::live_exports(), "threads_after": prepare::live_threads(),
+                "ms": t0.elapsed().as_millis() as u64, "unix_ns": now_ns().to_string()})
+            .to_string(),
+        );
+    }
+    let Some(s) = SESSION.get() else { return };
+    let started = std::time::Instant::now();
     if !send(s, Msg::Quit) {
         return; // no worker was started
     }
@@ -6382,6 +6489,7 @@ unsafe impl Sync for ClapEntry {}
 unsafe extern "C" fn e_init(plugin_path: *const c_char) -> bool {
     guard("entry init", true, move || {
         editor::set_bundle_hint(plugin_path);
+        prepare::reset_stop(); // #597: a load of the library in a process that unloaded it before starts with no stop sign
         true
     })
 }
@@ -6801,7 +6909,7 @@ mod tests {
         // a later re-analysis: its clock starts at its round, not at the old time
         a.has_events.store(false, Ordering::SeqCst);
         std::thread::sleep(std::time::Duration::from_millis(5));
-        let _flag = RoundFlag::set(vec![a.clone()]);
+        let _flag = RoundFlag::set(vec![a.clone()], false);
         let at = a.life.ready_at.load(Ordering::SeqCst);
         assert!(
             at > 1 && now1() - at < 1000,
@@ -6872,6 +6980,195 @@ mod tests {
         *a.life.fail.lock().unwrap() = None;
         a.analysis_failed.store(false, Ordering::SeqCst);
         assert_eq!(doc.states_now()["doc"]["hits"], json!(4));
+    }
+
+    /// A track that sits on two DAW track rows (the sequences 7 and 9), with its audio, failed.
+    fn on_two_rows() -> (Arc<DocShared>, Arc<SourceState>) {
+        let (doc, a, _b) = first_open_doc();
+        doc.sequences.lock().unwrap().insert(
+            9,
+            SeqInfo {
+                name: Some("Bus".into()),
+                order: Some(2),
+            },
+        );
+        a.regions.lock().unwrap().push(RegionSlot {
+            id: 99,
+            rec: service::RegionRec {
+                start_mod: 0.0,
+                dur_mod: 1.0,
+                start_play: 5.0,
+            },
+            sequence: 9,
+            name: None,
+        });
+        *a.wav.lock().unwrap() = Some(PathBuf::from("/nonexistent/a.wav"));
+        (doc, a)
+    }
+
+    /// #593: a restored track that has audio, is not done and never got a round has no clock; the first read of the state starts it, and after the limit the row
+    /// fails with a reason and a Retry instead of "analysing" for ever. A done track has no clock.
+    #[test]
+    fn a_track_with_audio_that_never_got_a_round_fails_after_the_limit_with_a_reason_and_retry() {
+        let (doc, a, _b) = first_open_doc();
+        *a.wav.lock().unwrap() = Some(PathBuf::from("/nonexistent/a.wav"));
+        assert_eq!(a.life.ready_at.load(Ordering::SeqCst), 0, "no round ran: no clock");
+        assert_eq!(state_of_row(&doc, "q7")["state"], json!("analysing"));
+        let started = a.life.ready_at.load(Ordering::SeqCst);
+        assert!(started != 0, "the first read of the state starts the clock");
+        let later = now1() + 601_000;
+        let st = firstopen::build(
+            &doc.state_facts_at(later)
+                .into_iter()
+                .map(|(f, _)| f)
+                .collect::<Vec<_>>(),
+            &firstopen::Limits::read(),
+            firstopen::Fault::default(),
+        );
+        let row = st.row("q7").unwrap();
+        assert_eq!(row.state, firstopen::State::Failed, "{row:?}");
+        assert_eq!(row.fail, Some(firstopen::Fail::TimedOut));
+        assert!(row.retry(), "and it has the Retry");
+        assert!(firstopen::row_text(row, firstopen::Fault::default()).contains("took too long"));
+        assert_eq!(
+            a.life.ready_at.load(Ordering::SeqCst),
+            started,
+            "the second read keeps the first time"
+        );
+        // a track that is done has no clock
+        a.has_events.store(true, Ordering::SeqCst);
+        assert_eq!(state_of_row(&doc, "q7")["state"], json!("done"));
+        assert_eq!(a.life.ready_at.load(Ordering::SeqCst), 0);
+    }
+
+    /// #593: a Retry round stamps the analysis clock of every track that takes part and ends it for every one of them; a round that is no Retry leaves it as it was.
+    #[test]
+    fn the_clock_of_every_track_of_a_retry_round_ends_with_the_round() {
+        let (_doc, a, b) = first_open_doc();
+        {
+            let _flag = RoundFlag::set(vec![a.clone(), b.clone()], true);
+            assert!(a.life.ready_at.load(Ordering::SeqCst) != 0 && b.life.ready_at.load(Ordering::SeqCst) != 0);
+        }
+        assert_eq!(a.life.ready_at.load(Ordering::SeqCst), 0);
+        assert_eq!(
+            b.life.ready_at.load(Ordering::SeqCst),
+            0,
+            "the track that was not analysed too"
+        );
+        {
+            let _flag = RoundFlag::set(vec![a.clone()], false);
+        }
+        assert!(
+            a.life.ready_at.load(Ordering::SeqCst) != 0,
+            "an ordinary round keeps its clock (the success ends it)"
+        );
+    }
+
+    /// #593: "Retry all" with a track on two DAW track rows: the second row shows no refusal for the job that the first row started.
+    #[test]
+    fn retry_all_shows_no_refusal_for_the_second_row_of_the_same_track() {
+        let (doc, a) = on_two_rows();
+        set_fail(&a, firstopen::Fail::Read);
+        let r = doc.retry_rows(&["q7".to_string(), "q9".to_string()]);
+        assert_eq!(r["refused"], json!([]), "{r}");
+        assert_eq!(r["started"], json!(["q7", "q9"]), "{r}");
+        // one job: the track started once
+        assert!(a.life.retry_at.load(Ordering::SeqCst) != 0);
+        // a second press at once is still refused for both rows
+        let again = doc.retry_rows(&["q7".to_string(), "q9".to_string()]);
+        assert_eq!(again["started"], json!([]), "{again}");
+    }
+
+    /// #593 round 2 (S2): a row that holds a failed source and a done one counts as started when the failed one was started in this press.
+    #[test]
+    fn a_second_row_with_a_done_source_beside_the_failed_one_shows_no_refusal() {
+        let (doc, a) = on_two_rows();
+        // the second row (sequence 9) holds the done source b as well
+        let b = named_source(&doc, 2, "t2", 9, 1);
+        b.props.lock().unwrap().name = format!("{:032x}", b.seq + 1);
+        b.props.lock().unwrap().sample_rate = 48000.0;
+        b.props.lock().unwrap().sample_count = 48000;
+        *b.wav.lock().unwrap() = Some(PathBuf::from("/nonexistent/b.wav"));
+        b.has_events.store(true, Ordering::SeqCst);
+        set_fail(&a, firstopen::Fail::Read);
+        let r = doc.retry_rows(&["q7".to_string(), "q9".to_string()]);
+        assert_eq!(r["refused"], json!([]), "{r}");
+        assert_eq!(r["started"], json!(["q7", "q9"]), "{r}");
+    }
+
+    /// #593 round 2 (S3): the wait of a deferred round is not analysis time: after 11 minutes of deferral the track is not failed; the clock starts after the wait.
+    #[test]
+    fn a_deferred_round_does_not_run_the_analysis_clock() {
+        let (doc, a, _b) = first_open_doc();
+        *a.wav.lock().unwrap() = Some(PathBuf::from("/nonexistent/a.wav"));
+        let state_at = |at: u64| {
+            let st = firstopen::build(
+                &doc.state_facts_at(at).into_iter().map(|(f, _)| f).collect::<Vec<_>>(),
+                &firstopen::Limits::read(),
+                firstopen::Fault::default(),
+            );
+            st.row("q7").unwrap().state
+        };
+        let t0 = now1();
+        assert_eq!(state_at(t0), firstopen::State::Analysing);
+        a.life.deferred.store(true, Ordering::SeqCst);
+        assert_eq!(
+            state_at(t0 + 11 * 60_000),
+            firstopen::State::Analysing,
+            "11 minutes of deferral are not analysis time"
+        );
+        a.life.deferred.store(false, Ordering::SeqCst);
+        let after = t0 + 11 * 60_000;
+        assert_eq!(
+            state_at(after),
+            firstopen::State::Analysing,
+            "the clock starts after the wait"
+        );
+        assert_eq!(
+            state_at(after + 601_000),
+            firstopen::State::Failed,
+            "and runs from there"
+        );
+    }
+
+    /// #593 round 2 (S4): a source that the worker leaves out of a round, or that was removed while its round waited, loses its mark `deferred`.
+    #[test]
+    fn the_mark_deferred_ends_for_a_source_left_out_and_for_a_removed_one() {
+        let (_doc, a, b) = first_open_doc();
+        a.has_events.store(true, Ordering::SeqCst); // done: needs no analysis
+        a.life.deferred.store(true, Ordering::SeqCst);
+        b.life.deferred.store(true, Ordering::SeqCst);
+        let kept = keep_needing(vec![a.clone(), b.clone()]);
+        assert_eq!(kept.len(), 1);
+        assert!(!a.life.deferred.load(Ordering::SeqCst), "left out: the mark ends");
+        assert!(b.life.deferred.load(Ordering::SeqCst), "kept: its round still waits");
+        b.removed.store(true, Ordering::SeqCst);
+        let mut requested = Vec::new();
+        requeue_deferred(&mut requested, vec![b.clone()]);
+        assert!(requested.is_empty());
+        assert!(!b.life.deferred.load(Ordering::SeqCst), "removed: the mark ends");
+    }
+
+    /// #593: a press of Retry, later than the wait limit, while a round of the track waits in the queue is refused.
+    #[test]
+    fn a_retry_while_a_deferred_round_waits_is_refused() {
+        let (doc, a, _b) = first_open_doc();
+        *a.wav.lock().unwrap() = Some(PathBuf::from("/nonexistent/a.wav"));
+        // a failed round (the worker gave up), then a press later than the wait limit, while a round of the track waits in the queue
+        set_fail(&a, firstopen::Fail::Round);
+        doc.auto_retry.store(0, Ordering::SeqCst);
+        let later = now1() + 700_000;
+        a.life.deferred.store(true, Ordering::SeqCst);
+        let r = doc.retry_rows_at(&["q7".to_string()], later);
+        assert_eq!(r["started"], json!([]), "{r}");
+        assert!(
+            r["refused"][0]["reason"].as_str().unwrap().contains("still working"),
+            "{r}"
+        );
+        // the round runs (or the wait ends): the press is accepted
+        a.life.deferred.store(false, Ordering::SeqCst);
+        let r = doc.retry_rows_at(&["q7".to_string()], later);
+        assert_eq!(r["started"], json!(["q7"]), "{r}");
     }
 
     #[test]

@@ -8325,7 +8325,7 @@ def stage_export_dialog_fault() -> bool:
 
 # ---------------------------------------------------------------- M1c4 (#589): the export dialog makes one file per DAW track
 
-def export_rows_run(label: str, env: dict | None = None, stuck: bool = False, late: bool = False) -> dict:
+def export_rows_run(label: str, env: dict | None = None, stuck: bool = False, late: bool = False, unload: bool = False) -> dict:
     """The REAL Export dialog in the REAL page (mode exportrows) on the host of the stage deliver (a DAW track with clips of three audio files, one with one
     file). The folder sheet is answered by DS_ARA_PICK_DIR; `other` is a folder that the plugin must refuse (it is empty at the end), `pick/sub` exists for the
     fault run prefix-dest."""
@@ -8338,7 +8338,7 @@ def export_rows_run(label: str, env: dict | None = None, stuck: bool = False, la
     pick, other = pick.resolve(), other.resolve()
     e = {"DS_ARA_PICK_DIR": str(pick), "DS_ARA_DRAG_PRESSED": "1"}
     e.update(env or {})
-    arg = "stuck" if stuck else "late" if late else f"{other};{pick}"
+    arg = "stuck" if stuck else "late" if late else "unload" if unload else f"{other};{pick}"
     rc, summary, rows = editor_run(f"exrows-{label}", "exportrows", CLAP, 1, e, [*DELIVER_ARGS, "--arg", arg], timeout=500)
     reps = page_reports(rows, "exportrows")
     return {"rc": rc, "rep": reps[0] if reps else {}, "rows": rows, "pick": pick, "other": other, "base": base.resolve(),
@@ -8440,9 +8440,29 @@ def export_rows_late_parts(d: dict) -> dict:
     got = midi_note_times(f) if f.is_file() else []
     late = {x.get("label"): x for x in r.get("steps", [])}.get("late", {})
     tmps = [x.name for x in exports.glob(".*.tmp")] if exports.is_dir() else []
-    return {"export-rows-late": (bool((r.get("edit") or {}).get("ok")) and late.get("export_finished", True) is not False and len(got) == len(want) > 0
+    sig = r.get("signal") or {}
+    # #597: the edit waits for a signal of the plugin (the copy is done, the late check not yet), not for a fixed time; the signal was false before the press
+    signalled = isinstance(sig.get("ms"), int) and sig["ms"] >= 0 and sig.get("before_copied") is False
+    return {"export-rows-late": (signalled and bool((r.get("edit") or {}).get("ok")) and late.get("export_finished", True) is not False and len(got) == len(want) > 0
                                  and all(abs(a - b) <= 2 / 48000 for a, b in zip(got, want)) and not tmps,
-                                 f"a hit added while the export copies: the check after the copy refused the old files and the new set was delivered ({len(got)} notes, want {len(want)}; temporary files {tmps}; result {late.get('result')!r})")}
+                                 f"a hit added while the export copies, after the signal of the plugin that the copy is done (signal after {sig.get('ms')} ms, false before the press: {sig.get('before_copied')}): the check after the copy refused the old files and the new set was delivered ({len(got)} notes, want {len(want)}; temporary files {tmps}; result {late.get('result')!r})")}
+
+
+def export_rows_unload_parts(d: dict) -> dict:
+    """#597: the host unloads the library while the export copies (slow-copy-long keeps the copy open 8 s): the unload waits for the request thread of the copy, which stops at its
+    checkpoint; no thread of the export runs after the unload, no file is written or replaced, no temporary file is left."""
+    r = d["rep"]
+    exports = next(iter(sorted(d["cache"].glob("documents/*/project/Exports"))), d["cache"] / "none")
+    rows = [x for x in d["rows"] if x.get("event") == "prepare_unloaded"]
+    row = rows[-1] if rows else {}
+    written = sorted(f.name for f in exports.glob("*") if f.is_file()) if exports.is_dir() else []
+    tmps = [f.name for f in exports.glob(".*.tmp")] if exports.is_dir() else []
+    sig = (r.get("unload") or {}).get("signal_ms")
+    before = r.get("before") or {}
+    return {"export-rows-unload": (isinstance(sig, int) and sig >= 0 and before.get("copied") is False and row.get("exports_at_start") == 2
+                                   and row.get("exports_after") == 0 and row.get("ended") is True and (row.get("ms") or 99999) < 4000 and not written and not tmps,
+                                   f"the library was unloaded while a copy ran (signal after {sig} ms, false before the press: {before.get('copied')}): the unload saw {row.get('exports_at_start')} export guard(s) (want 2: the request thread of the page and the export itself), "
+                                   f"waited {row.get('ms')} ms (limit 4000), {row.get('exports_after')} still ran after it (want 0), ended {row.get('ended')}; files written {written}, temporary files {tmps}")}
 
 
 def stage_export_rows() -> bool:
@@ -8452,12 +8472,20 @@ def stage_export_rows() -> bool:
     d = export_rows_run("stuck", {"DS_ARA_PREPARE_FAULT": "forever,no-watchdog"}, stuck=True)
     ok = print_parts("", export_rows_stuck_parts(d)) and ok
     d = export_rows_run("late", {"DS_ARA_PREPARE_FAULT": "slow-copy"}, late=True)
-    return print_parts("", export_rows_late_parts(d)) and ok
+    ok = print_parts("", export_rows_late_parts(d)) and ok
+    d = export_rows_run("unload", {"DS_ARA_PREPARE_FAULT": "slow-copy-long"}, unload=True)
+    return print_parts("", export_rows_unload_parts(d)) and ok
 
 
 def stage_export_rows_fault() -> bool:
     d = export_rows_run("fault-no-late-check", {"DS_ARA_PREPARE_FAULT": "slow-copy,no-late-check"}, late=True)
     ok = fault_part("export-rows-fault-no-late-check", export_rows_late_parts(d), "export-rows-late", "the hits are not checked again after the copy: the old files are delivered although a hit changed")
+    d = export_rows_run("fault-no-signal", {"DS_ARA_PREPARE_FAULT": "slow-copy,no-copied-signal"}, late=True)
+    ok = fault_part("export-rows-fault-no-signal", export_rows_late_parts(d), "export-rows-late", "the plugin never says that the copy is done: the stage finds no signal and does not edit at a guessed time") and ok
+    d = export_rows_run("fault-no-thread-guard", {"DS_ARA_PREPARE_FAULT": "slow-copy-long,no-thread-guard"}, unload=True)
+    ok = fault_part("export-rows-fault-no-thread-guard", export_rows_unload_parts(d), "export-rows-unload", "the request thread of the export is not counted: the unload sees one guard, not two") and ok
+    d = export_rows_run("fault-no-export-wait", {"DS_ARA_PREPARE_FAULT": "slow-copy-long,no-export-wait"}, unload=True)
+    ok = fault_part("export-rows-fault-no-export-wait", export_rows_unload_parts(d), "export-rows-unload", "the unload does not wait for a running copy (the state before #597): a thread of the export still runs after it") and ok
     for label, env, part, what in (
         ("per-source", {"DS_ARA_PREPARE_FAULT": "per-source"}, "export-rows-files", "one file per audio file, as the old dialog made them: the file set is not one file per DAW track"),
         ("stale-ok", {"DS_ARA_PREPARE_FAULT": "stale-ok,no-late-check"}, "export-rows-wait", "a copy that ignores the state of the hits, before and after the copy, writes the old file after an edit"),

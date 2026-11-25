@@ -307,3 +307,29 @@ reached). The standalone stage `standalone-diff` is expected to pass on this tic
 - N4, what is NOT proved, plainly: (1) the analysis limit is covered by unit tests only, no stage waits that long; (2) the panic path (last good list, one error line,
   gate closed) is covered by unit tests only; (3) a Retry of a read works only when the host calls back (notifyModelUpdates): a host that never does leaves the row
   asking, then offline again. Nothing was tried in a real DAW.
+
+## 14. Round 3 (follow-up points of #593)
+
+- A track with audio that is not done and has no analysis clock (a restored track that never got a round) starts its clock at the first read of the state; after the limit of
+  section 12 it fails with the reason "took too long" and a Retry. A track that is done has no clock: the read of the state ends a clock that is left over. Decision taken: the
+  first read, as the ticket says, not the restore, because the state is the one place every path passes.
+- A Retry round (every target has the Retry mark) ends the analysis clock of every track that takes part when it ends, whether this round analysed the track or not; a
+  deferral of the round ends it too, the next run stamps it again.
+- "Retry all" with a track on two DAW track rows: the sources that this press started are remembered; a row whose sources were all started in this press counts as started and shows
+  no refusal. A press for one row only still starts the track once.
+- A round that waits in the queue (a job of the page runs, or the service answered 409) sets `deferred` on its sources; a press of Retry is refused with the usual text ("still
+  working") while it is set. It ends when the round runs (the round flag) or when the document closes. Decision taken: no new text.
+- The page shows one strip for each state row of a track on two DAW track rows (the strip of a row is found by its row id), each with its own name and its own Retry. Decision
+  taken: one strip for each row, not one strip that names both, because Retry works for one row.
+- The state request of the page ends after 5 s without an answer (`HST.reqMs`); the poll goes on and the page does not call the plugin absent for it.
+- The handle gate with the entry for all rows (`*`, the state path failed) has a unit test of the producer: every handle and the merged file are preparing, the export of the dialog
+  and a take are refused, and they open again when the entry goes.
+
+### Round 3, second read (review of 8b19470)
+
+- "Retry all": a row counts as started when every source of it that is failed or offline was started in this press (a done source beside it does not matter).
+- The analysis clock neither starts nor runs while a round of the track is deferred (the wait is not analysis time); a clock left over is cleared and starts again at the first read
+  after the wait.
+- The mark `deferred` ends for a source that the worker leaves out of a round and for a source that was removed while its round waited.
+- A state answer that comes after the 5 s limit is still used when it is newer than the last one (`HST.take` drops an older one).
+- The unit test of the handle gate with the entry for all rows covers behaviour that existed before; it changes nothing.

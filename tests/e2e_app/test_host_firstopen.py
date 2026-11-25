@@ -106,6 +106,44 @@ def test_a_failed_row_shows_the_reason_and_retry_and_retry_all_needs_more_than_o
     assert host.locator("#hstLine .hstRetryAll").get_attribute("class") and host.locator("#lanesScroll .hstRetry").count() == 2
 
 
+def test_a_track_on_two_daw_rows_has_one_strip_for_each_row_with_its_own_name_and_retry(host):
+    """#593: the page has ONE lane for a track but the plugin gives one state row for each DAW track row that holds a clip of it: each row gets its own strip."""
+    two = [row("q1", "Kick In", "failed", "Kick In: the DAW did not hand over the audio. Press Retry.", [K], retry=True),
+           row("q5", "Bus", "failed", "Bus: the DAW did not hand over the audio. Press Retry.", [K], retry=True)]
+    give(host, payload(two, "attention", "2 of 2 tracks need attention.", attention=2))
+    s = strips(host)
+    assert [x["row"] for x in s] == ["q1", "q5"], s
+    assert s[0]["text"].startswith("Kick In:") and s[1]["text"].startswith("Bus:"), "the second row keeps its own name"
+    assert all(x["inHeader"] and x["retry"] for x in s)
+    host.locator("#lanesScroll .hostState[data-row='q5'] .hstRetry").click()
+    assert host.evaluate("() => window.__retries")[-1] == ["q5"], "the Retry of the second strip asks for the second row"
+    one = [two[0], row("q5", "Bus", "done", "Bus: 4 hits", [K], hits=4)]
+    give(host, payload(one, "attention", "1 of 2 tracks needs attention.", gen=2, attention=1))
+    assert [x["row"] for x in strips(host)] == ["q1"], "a strip that its row no longer needs goes, the other stays"
+
+
+def test_a_request_of_the_state_that_never_answers_ends_and_the_poll_goes_on(host):
+    """#593: a hostStates call that never returns used to end the poll of the page for ever."""
+    rows = [row("q1", "Kick In", "analysing", "Kick In: analysing", [K])]
+    give(host, payload(rows, "analysing", "Analysing: 0 of 1 track.", gen=3))
+    res = host.evaluate("""async () => { clearTimeout(HST.poll); HST.reqMs = 150; const n0 = HST.pulls;
+      B.hostStates = () => new Promise(() => {});
+      const r = await HST.pull();
+      return { r, polling: HST.poll !== null, absent: HST.absent, pulls: HST.pulls - n0, kept: HST.st && HST.st.gen }; }""")
+    assert res == {"r": False, "polling": True, "absent": False, "pulls": 1, "kept": 3}, res
+    host.evaluate("() => { HST.reqMs = 5000; clearTimeout(HST.poll); }")
+
+
+def test_an_answer_that_comes_after_the_limit_is_still_used_when_it_is_newer(host):
+    """#593 round 2 (N9): a slow plugin must still update the page."""
+    rows = [row("q1", "Kick In", "analysing", "Kick In: analysing", [K])]
+    give(host, payload(rows, "analysing", "Analysing: 0 of 1 track.", gen=3))
+    newer = payload(rows, "analysing", "Analysing: 0 of 1 track.", gen=4)
+    host.evaluate("""async p => { clearTimeout(HST.poll); HST.reqMs = 80; B.hostStates = () => new Promise(ok => setTimeout(() => ok(p), 300)); await HST.pull(); }""", newer)
+    host.wait_for_function("() => HST.st.gen === 4")
+    host.evaluate("() => { HST.reqMs = 5000; clearTimeout(HST.poll); }")
+
+
 def test_a_state_change_is_written_once_not_at_every_poll(host):
     rows = [row("q1", "Kick In", "analysing", "Kick In: analysing", [K])]
     give(host, payload(rows, "analysing", "Analysing: 0 of 1 track."))

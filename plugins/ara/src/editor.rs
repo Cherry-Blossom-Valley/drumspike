@@ -468,11 +468,18 @@ fn spawn_request(shared: &Arc<Shared>, rest: String, query: String, body: Vec<u8
         return;
     }
     let sh = Arc::clone(shared);
+    // #597: the request thread of an export runs library code, so a plugin unload counts it (taken before the thread starts, dropped when it ends)
+    let live = rest
+        .starts_with("invoke/plugin_deliver_export")
+        .then(crate::prepare::thread_guard)
+        .flatten();
+    let guarded = live.is_some();
     let slot: Arc<Mutex<Option<Responder>>> = Arc::new(Mutex::new(Some(responder)));
     let slot2 = Arc::clone(&slot);
     let spawned = std::thread::Builder::new()
         .name("drumspike-ara-page".into())
         .spawn(move || {
+            let _live = live;
             REQ_SEQ.with(|c| c.set(seq));
             let run = || route(&sh, &rest, &query, &body);
             let answer = if crate::test_switch("DS_ARA_GUARD_FAULT").as_deref() == Ok("off") {
@@ -498,10 +505,19 @@ fn spawn_request(shared: &Arc<Shared>, rest: String, query: String, body: Vec<u8
             }
             let responder = slot2.lock().unwrap_or_else(|e| e.into_inner()).take();
             if let Some(responder) = responder {
-                on_main(Box::new(move || {
-                    main_check("answer to the web view");
-                    responder.respond(respond(answer.status, answer.mime, answer.body, false));
-                }));
+                let post = move || {
+                    on_main(Box::new(move || {
+                        main_check("answer to the web view");
+                        responder.respond(respond(answer.status, answer.mime, answer.body, false));
+                    }));
+                };
+                if guarded {
+                    // #597 round 2: the answer of an export is posted only while the unload has not begun (the gate closes under the same lock as the stop), and
+                    // the guard drops after the post: main cannot leave the unload with this thread still to post a closure of the library
+                    crate::prepare::post_unless_unloading(post);
+                } else {
+                    post();
+                }
             }
         });
     if spawned.is_err() {

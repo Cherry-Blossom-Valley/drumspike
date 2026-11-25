@@ -221,3 +221,52 @@ this machine).
 - N8: a cancel during the wait says "export cancelled: nothing was written". N10: `plan.exists` and `replaced` use `prepare::replaces`.
 - N7: the state of a set is read under the lock of the worker's books for the time of a `stat` per file; this is short and unchanged by this ticket, no change.
   N9: the second `canonicalize` (the folder of the prepared files against the chosen folder) is cheap and runs once per call, no change.
+
+## Round 3 (follow-up points of #597)
+
+- Unload: an export of the dialog runs on the request thread of the page, which the unload did not count. The request thread of `plugin_deliver_export` and the export itself
+  are counted from the start of the call (`prepare::ExportLive`); `stop_all` sets the stop sign and waits for them, at most 4 s (once, on the main thread, at the unload; the
+  worker thread keeps its 1.5 s). The copy looks at the sign between two pieces of 1 MiB, in the wait of the fault `slow-copy`, and once more before the first rename; it then
+  returns "the plugin is closing: nothing was written" and its temporary files go (the guard). A rename that has begun is finished: the renames are quick and leave complete
+  files. The only change to the report is the row `prepare_unloaded` (exports at the start, after, wait time).
+- Decision taken (the ticket does not give it): the 4 s limit. A copy stops within one piece (1 MiB) unless the disk blocks that one write; 4 s is the longest the main thread
+  may wait, once. A write that blocks longer leaves the thread behind and the report says `ended: false`, as for the worker.
+- The stage part `export-rows-late` waits for the field `copied` of `plugin_deliver_progress` (all files copied, hits not checked yet), false before the press. The new part
+  `export-rows-unload` unloads the library in that window (`slow-copy-long`, 8 s). Fault runs: `no-copied-signal`, `no-export-wait`.
+- "Not written" names a DAW track once, whatever the number of its kinds.
+- The poll of the waiting dialog (every 300 ms, `plugin_deliver_export` with `start: false`) used to make a full look at the rows and hits: 30.9 ms per call with 40 rows of 300
+  hits (release build, this machine), 103 ms per second of waiting. It is now answered from the books of the worker while they say "preparing" (a set that is wanted and not
+  ready, no failure, no kind that is off): 0.02 ms per call, 0.1 ms per second. It can only make the dialog wait. When the books are silent, say a set that looks ready, a set
+  that is off or failed, or no entry yet, the full check runs and decides, so a hit that changed after the worker's look is still found before any copy. The first poll before
+  the worker's first look is still a full one. The cost of the page side (the JSON of the answer and the 250 ms progress poll) was not measured.
+- The spike files (point 9) are a proposal only, see the next section.
+
+### Proposal: the disk space of the prepared spike files (not built, the coordinator decides)
+
+Measured (release build, 12 tracks of 10 minutes at 48 kHz, 700 hits each): the 12 spike sets take 1382 MB in `Exports/.prepared/` and 785 ms to make; the 12 MIDI sets take
+133 ms and a few KB; the copy of 24 files by the dialog takes 790 ms.
+
+1. Keep spike files only while a window of the document is open. Delete the wav sets of `.prepared/` when the last editor of the document closes, and at the unload. Cost: a
+   first handle press after the next open waits for the set (about 65 ms per file, 0.8 s for 12 tracks; the kind turns `off` again, as at the first use). Risk: low; a drag in
+   progress holds a hard link or copy in `Dragged/`, so it is not affected; the delete must skip a set that an export is copying (the export flag).
+2. A size limit with the oldest sets removed first (for example 2 GB). Cost: a few lines in the clean-up of `prepared`, and the books must forget the removed sets so that no handle
+   says "ready" for a missing file (the check `files_ok` already makes that set stale). Risk: medium; a big song can need more than the limit on its own, and a limit that is too low
+   makes the handles flicker between ready and preparing while the user works.
+3. Do not keep wav sets at all: render at the press of a handle or of Export, and remove them when the drag or the export ends. Cost: every press waits for the render (0.8 s for 12
+   tracks), which breaks the rule of M1c3 that a handle is ready before the user asks. Risk: high for the feel; the disk use is the lowest.
+
+My reading: option 1, because it needs no new number and the render after an open is short. Option 2 is the one to add if the user wants the sets to stay across sessions.
+
+### Round 3, second read (review of 8b19470)
+
+- Press of Export inside the 150 ms: `infoFlush` returns the promise of the plan call and Export awaits it, so the files are replaced after the new count is on the screen (the
+  page test answers the plan call after 50 ms).
+- Unload order: the rounds of the documents are cancelled first, then the wait for the exports and the preparation workers (4 s), then the worker of the rounds. An export that
+  waits for a service lock that a round holds can then end inside the 4 s.
+- What is true after the unload: the wait is bounded. A thread that still runs after 4 s keeps running (the plugin cannot stop a thread); the report row `prepare_unloaded` says
+  `ended: false` and the count after. The stop sign stays set after an unload; a load of the library in the same process (`entry.init`) resets it and opens the post gate.
+- The answer of an export is posted to the main queue only while the unload has not begun: `stop_all` closes the gate under the same lock as the post, and the guard of the
+  request thread drops after the post. Answers of other commands are posted as before (not changed here).
+- The stage `export-rows-unload` asks for exactly 2 guards (the request thread of the page and the export itself). The fault run `no-thread-guard` removes the first and the stage
+  sees 1. The stage cannot see a thread that runs after the unload with no guard at all.
+- A poll after the document closed answers 503. The unit test of the entry "*" of the gate (#593) is coverage of behaviour that existed; it changes nothing.
