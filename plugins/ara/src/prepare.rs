@@ -707,9 +707,29 @@ fn temp_parts(name: &str) -> Option<(u32, u64)> {
     Some((pid.parse().ok()?, n.parse().ok()?))
 }
 
-/// Remove the temporary files that an earlier export of the plugin left in `dir`: a name of its own pattern from an earlier export of this process (exports run one
-/// at a time), or any such name older than an hour. Any other file stays.
-fn clean_old_temps(dir: &Path) {
+/// Exports of this process that are between their clean-up and their last rename (all documents, all plugin instances of the DAW).
+static COPYING: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+
+/// Counts one export in `COPYING` until it ends, however it ends.
+struct CopyGuard;
+
+impl CopyGuard {
+    fn new() -> Self {
+        COPYING.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        CopyGuard
+    }
+}
+
+impl Drop for CopyGuard {
+    fn drop(&mut self) {
+        COPYING.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
+/// Removes the temporary files that an earlier export of the plugin left in `dir`: a name of this process with an earlier number, or a name
+/// of any process that is older than one hour. `alone` is false while another export of this process copies (another document or plugin
+/// instance of the DAW can export into the same folder): then a name of this process can be its live file, and only the age rule applies.
+fn clean_old_temps(dir: &Path, alone: bool) {
     let now = TEMP_SEQ.load(std::sync::atomic::Ordering::SeqCst);
     for e in std::fs::read_dir(dir).into_iter().flatten().flatten() {
         let name = e.file_name().to_string_lossy().into_owned();
@@ -720,7 +740,7 @@ fn clean_old_temps(dir: &Path) {
             .ok()
             .and_then(|t| t.elapsed().ok())
             .is_some_and(|d| d > Duration::from_secs(3600));
-        if ((pid == std::process::id() && n < now) || old) && e.metadata().is_ok_and(|m| m.is_file()) {
+        if ((alone && pid == std::process::id() && n < now) || old) && e.metadata().is_ok_and(|m| m.is_file()) {
             let _ = std::fs::remove_file(e.path());
         }
     }
@@ -1385,7 +1405,8 @@ impl Prep {
         self.exp.total.store(plan.len(), SeqCst);
         self.exp.busy.store(true, SeqCst);
         let _busy = BusyGuard(&self.exp.busy);
-        clean_old_temps(&dest_c);
+        let _copying = CopyGuard::new();
+        clean_old_temps(&dest_c, COPYING.load(SeqCst) == 1);
         let mut temps = Temps(Vec::new());
         let mut tmp_of: Vec<PathBuf> = Vec::new();
         for (key, src, out) in &plan {
@@ -3118,7 +3139,21 @@ mod tests {
             .unwrap();
         f.set_modified(std::time::SystemTime::now() - Duration::from_secs(7200))
             .unwrap();
-        clean_old_temps(&d);
+        // another export of this process copies: a name of this process can be its live file and stays; the age rule still applies
+        clean_old_temps(&d, false);
+        assert!(
+            d.join(&mine_old).is_file() && !d.join(&other_old).exists(),
+            "not alone: only the age rule"
+        );
+        std::fs::write(d.join(&other_old), b"x").unwrap();
+        let f = std::fs::OpenOptions::new()
+            .write(true)
+            .open(d.join(&other_old))
+            .unwrap();
+        f.set_modified(std::time::SystemTime::now() - Duration::from_secs(7200))
+            .unwrap();
+        drop(f);
+        clean_old_temps(&d, true);
         let left: HashSet<String> = std::fs::read_dir(&d)
             .unwrap()
             .flatten()
