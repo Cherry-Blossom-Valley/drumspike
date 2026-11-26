@@ -9,6 +9,21 @@ dev_may_open_prs: true
 dev_branch_prefix: crew/
 protected: [main]
 ci_mode: local                      # crew/** pushes start no CI (#475): agents deliver with --local-run
+# The commands of a Gate that crewboard runs itself: `crewboard verify <n> --run-check <name>` runs them on a
+# clean checkout of the PR head, without a shell, and writes the result. They mirror the justfile.
+checks:
+  - lint-fmt: cargo fmt --all -- --check
+  - lint-clippy: cargo clippy --all-targets -- -D warnings
+  - rust: cargo test --workspace
+  - tools: cargo build --release -p drumspike-devtools
+  - bridge: cargo build -p drumspike-devtools --bin ds-bridge
+  - app: env DRUMSPIKE_AUDIO=null DRUMSPIKE_REQUIRE_APP=1 DRUMSPIKE_REQUIRE_CORE=1 uv run pytest -q
+  - ara: plugins/ara/check.sh all
+  - private: uv run python tools/check_private.py --diff origin/main
+# Variables of the host that a check gets (names only; the values are never in the repo)
+check_env: [DRUMSPIKE_PRIVATE_WORDS, DRUMSPIKE_PRIVATE_PATTERNS, DS_ARA_DEPS, CARGO_TARGET_DIR]
+# A PR that changes one of these files is merged by the owner only, and no check runs for it
+protected_paths: [plugins/ara/check.sh, tools/check_private.py, tools/media/check_paths.py]
 # ADVICE: crewboard does not read these keys; the models read them as the owner's rules
 needs_owner: [release, ci-config, credentials, delete, new-scope, new-repo]
 ---
