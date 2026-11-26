@@ -1,0 +1,88 @@
+diff --git a/.github/workflows/release.yml b/.github/workflows/release.yml
+index 8e82b23..03181ac 100644
+--- a/.github/workflows/release.yml
++++ b/.github/workflows/release.yml
+@@ -1,13 +1,17 @@
+ # P4-41 (owner decision 2026-10-16): release by tag. The controller pushes the tag vX.Y.Z after CI is
+ # green on that commit. The jobs run in this order:
+-#   check (arm64-mac)       tag = version in four files, release notes file, ci.yml green on the commit
+-#   build (arm64-mac)       host lock, release.sh (sign + notarize, both architectures), artifacts
+-#   intel-check (x86-mac)      the Intel .dmg under the hardened runtime (docs/RELEASING.md)
+-#   publish (arm64-mac)     release.sh --publish-only --draft: a DRAFT release; the owner publishes it in GitHub
++#   check            tag = version in four files, release notes file, ci.yml green on the commit
++#   build            host lock, release.sh (sign + notarize, both architectures), artifacts
++#   intel-check      the Intel .dmg under the hardened runtime (docs/RELEASING.md)
++#   publish          release.sh --publish-only --draft: a DRAFT release; the owner publishes it in GitHub
++# The signing runner of check, build and publish comes from the repository variable
++# DRUMSPIKE_RELEASE_RUNNER (Settings, Actions, Variables); unset, it is the default signing
++# runner "arm64-mac". intel-check always runs on "x86-mac".
+ # workflow_dispatch with dry_run runs everything except publish.
+ # This workflow signs on purpose, so the signing guard of ci.yml is not used. The jobs read only two NAMES
+ # (the identity name and the notary profile name, not secrets). The key and the notary password stay in
+-# the owner's keychain on arm64-mac. No step prints the environment.
++# the keychain of the signing runner. No step prints the environment. The label of the signing
++# runner of this run is in the environment variable DRUMSPIKE_RELEASE_RUNNER_LABEL.
+ # The owner's approval is the click "Publish release" on the draft (GitHub refuses required reviewers on
+ # this private repository). A draft is visible only to collaborators.
+ name: release
+@@ -40,10 +44,16 @@ env:
+   # The signing identity is a repository variable (Settings, Actions, Variables), not a line of this file.
+   DRUMSPIKE_SIGN_IDENTITY: ${{ vars.DRUMSPIKE_SIGN_IDENTITY }}
+   DRUMSPIKE_NOTARY_PROFILE: drumspike-notary
++  # The label of the signing runner of this run, for the messages of the steps. The jobs read the
++  # same expression in their runs-on; a job cannot read an env entry there.
++  DRUMSPIKE_RELEASE_RUNNER_LABEL: ${{ vars.DRUMSPIKE_RELEASE_RUNNER || 'arm64-mac' }}
+ 
+ jobs:
+   check:
+-    runs-on: [self-hosted, arm64-mac]
++    # The signing runner is a repository variable too (Settings, Actions, Variables). Unset, the
++    # jobs run on the default signing runner "arm64-mac"; set (for example to "studio-mac"), on
++    # that self-hosted runner. intel-check below stays on "x86-mac".
++    runs-on: ${{ vars.DRUMSPIKE_RELEASE_RUNNER && fromJSON(format('["self-hosted", "{0}"]', vars.DRUMSPIKE_RELEASE_RUNNER)) || fromJSON('["self-hosted", "arm64-mac"]') }}
+     timeout-minutes: 15
+     outputs:
+       tag: ${{ steps.ver.outputs.tag }}
+@@ -146,7 +156,7 @@ jobs:
+ 
+   build:
+     needs: check
+-    runs-on: [self-hosted, arm64-mac]
++    runs-on: ${{ vars.DRUMSPIKE_RELEASE_RUNNER && fromJSON(format('["self-hosted", "{0}"]', vars.DRUMSPIKE_RELEASE_RUNNER)) || fromJSON('["self-hosted", "arm64-mac"]') }}
+     timeout-minutes: 60
+     steps:
+       - uses: actions/checkout@v7
+@@ -200,7 +210,7 @@ jobs:
+           t=$(mktemp -d)
+           cp /usr/bin/true "$t/probe"
+           if ! perl -e 'alarm 60; exec @ARGV' codesign --force --sign "$DRUMSPIKE_SIGN_IDENTITY" "$t/probe" >"$t/out" 2>&1; then
+-            echo "::error::the signing key is not usable (keychain locked, owner not logged in, or the key waits for a click). Unlock the login keychain on arm64-mac, then run this workflow again."
++            echo "::error::the signing key is not usable (keychain locked, owner not logged in, or the key waits for a click). Unlock the login keychain on the signing runner of this run ($DRUMSPIKE_RELEASE_RUNNER_LABEL), then run this workflow again."
+             sed -e 's/^/codesign: /' "$t/out" | head -n 5
+             rm -rf "$t"
+             exit 1
+@@ -257,7 +267,7 @@ jobs:
+           retention-days: 7
+ 
+   # The Intel app under the hardened runtime needs the right Team ID and must start
+-  # (docs/RELEASING.md, "Check the Intel app on x86-mac"). Everything stays in
++  # (docs/RELEASING.md, "Check the Intel app on the Intel Mac"). Everything stays in
+   # $HOME/release-check.
+   intel-check:
+     needs: [check, build]
+@@ -310,11 +320,13 @@ jobs:
+           rm -rf $HOME/release-check/mnt $HOME/release-check/app ~/release-check/in
+ 
+   # No environment gate: this job makes a DRAFT release. The owner publishes it in GitHub.
+-  # release.sh publishes through the gh login of the owner on arm64-mac: this job sets no GH_TOKEN on purpose.
++  # release.sh publishes through the gh login of the owner on the signing runner of this run
++  # (the repository variable DRUMSPIKE_RELEASE_RUNNER, default arm64-mac): this job sets no
++  # GH_TOKEN on purpose.
+   publish:
+     if: ${{ !inputs.dry_run }}
+     needs: [check, build, intel-check]
+-    runs-on: [self-hosted, arm64-mac]
++    runs-on: ${{ vars.DRUMSPIKE_RELEASE_RUNNER && fromJSON(format('["self-hosted", "{0}"]', vars.DRUMSPIKE_RELEASE_RUNNER)) || fromJSON('["self-hosted", "arm64-mac"]') }}
+     timeout-minutes: 20
+     steps:
+       # actions/checkout runs "git clean -ffdx" by default: it removes target/ with the notarized files.
