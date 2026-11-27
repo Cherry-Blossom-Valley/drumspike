@@ -21,7 +21,7 @@ checks:
   - ara: plugins/ara/check.sh all
   - private: uv run python tools/check_private.py --diff origin/main
 # Variables of the host that a check gets (names only; the values are never in the repo)
-check_env: [DRUMSPIKE_PRIVATE_WORDS, DRUMSPIKE_PRIVATE_PATTERNS, DS_ARA_DEPS, CARGO_TARGET_DIR]
+check_env: [DRUMSPIKE_PRIVATE_WORDS, DRUMSPIKE_PRIVATE_PATTERNS, DS_ARA_DEPS]
 # A PR that changes one of these files is merged by the owner only, and no check runs for it
 protected_paths: [plugins/ara/check.sh, tools/check_private.py, tools/media/check_paths.py]
 # ADVICE: crewboard does not read these keys; the models read them as the owner's rules
