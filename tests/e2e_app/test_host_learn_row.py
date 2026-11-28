@@ -345,3 +345,19 @@ def test_after_remove_example_on_the_origin_a_hint_shows_and_apply_takes_the_cop
     host.wait_for_function("() => !document.getElementById('hostLearnNote')")
     assert not (learn_of(host, sid, B) or {}).get("row"), "the copy of the removed mark is gone"
     assert not grey(host, B), "and file b is no longer filtered by it"
+
+
+def test_after_a_partial_remove_example_the_hint_shows_and_apply_copies_the_mark_again(host):
+    sid = sid_of(host)
+    host.evaluate("() => { lnSetSel('Kick In', 0.4, 2.6); }")
+    host.keyboard.press("K")
+    idle(host)
+    m = learn_of(host, sid, A)["marks"][0]
+    assert len(m["at"]) >= 3 and len(learn_of(host, sid, B)["row"][0]["fps"]) == len(m["at"])
+    host.evaluate("([n, id, at]) => B.learnRemove(S.sid, n, id, at).then(r => lnApply(r.track, r.learn, r))", [A, m["id"], m["at"][1]])
+    host.evaluate("() => updateStatus()")
+    host.wait_for_function("() => document.getElementById('hostLearnNote')")
+    host.locator("#hostLearnNote a.hostLearnApply").click()
+    idle(host)
+    host.wait_for_function("() => !document.getElementById('hostLearnNote')")
+    assert len(learn_of(host, sid, B)["row"][0]["fps"]) == len(m["at"]) - 1

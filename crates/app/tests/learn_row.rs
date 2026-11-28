@@ -571,3 +571,41 @@ fn size_of_the_copies() {
         without.to_string().len()
     );
 }
+
+/// #587 review F7: a partial Remove Example on the origin leaves the copy valid for the rest; a later adopt with a subset of ids
+/// copies the changed mark again, so file b follows the current mark and loses nothing.
+#[test]
+fn a_partial_remove_example_is_copied_again_with_the_next_adopt() {
+    let r = row("lr_partial", 20, 0.3, 48_000, 48_000, None);
+    let (t0, t1) = (r.kicks[0] - 0.05, r.kicks[2] + 0.05);
+    let m = r
+        .svc
+        .track_learn_mark(&r.sid, "a", "this", Some((t0, t1)), None)
+        .unwrap();
+    let id = m["mark"]["id"].as_str().unwrap().to_string();
+    let ats: Vec<f64> = m["mark"]["at"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v.as_f64().unwrap())
+        .collect();
+    assert!(ats.len() >= 3, "{ats:?}");
+    r.svc.track_learn_adopt(&r.sid, "b", "a", None).unwrap();
+    let n_before = learn_of(&r, "b")["row"][0]["fps"].as_array().unwrap().len();
+    r.svc.track_learn_remove(&r.sid, "a", &id, Some(ats[1])).unwrap();
+    let m2 = r
+        .svc
+        .track_learn_mark(&r.sid, "a", "not", None, Some(first_of(&r, "a", &r.clicks)))
+        .unwrap();
+    let id2 = m2["mark"]["id"].as_str().unwrap().to_string();
+    r.svc.track_learn_adopt(&r.sid, "b", "a", Some(&[id2.clone()])).unwrap();
+    let row_b = learn_of(&r, "b")["row"].as_array().unwrap().clone();
+    let copy = |i: &str| row_b.iter().find(|e| e["id"] == i).cloned();
+    let old = copy(&id).expect("the copy of the changed mark is still there");
+    assert_eq!(
+        old["fps"].as_array().unwrap().len(),
+        n_before - 1,
+        "and it follows the origin: one example less"
+    );
+    assert!(copy(&id2).is_some(), "the new mark is copied");
+}

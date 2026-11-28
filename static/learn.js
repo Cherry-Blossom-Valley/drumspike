@@ -294,7 +294,8 @@ function lnRowGaps() {   // the audio files of a DAW track that do not follow th
         if (from === to || (S.tracks[to] && S.tracks[to].follows)) continue;
         const ids = (((S.tracks[from] || {}).learn || {}).marks || []).filter(m => !row.some(x => x.from === from && x.id === m.id && x.kind === m.kind)).map(m => m.id);
         const marks = ((S.tracks[from] || {}).learn || {}).marks || [];
-        const stale = row.some(x => x.from === from && !marks.some(m => m.id === x.id && m.kind === x.kind));   // a copy whose mark the origin has not any more: Apply takes it back
+        const same = (a, b) => (a || []).length === (b || []).length && (a || []).every((v, i) => Math.abs(v - b[i]) < 1e-9);
+        const stale = row.some(x => x.from === from && !marks.some(m => m.id === x.id && m.kind === x.kind && same(m.at, x.at)));   // a copy whose mark the origin has not any more: Apply takes it back
         if (ids.length || stale) gaps.push({ to, from, ids });
       }
     }

@@ -1384,7 +1384,12 @@ impl Service {
             .into_iter()
             .filter(|m| {
                 let id = m["id"].as_str().unwrap_or_default();
-                ids.is_none_or(|l| l.iter().any(|x| x == id)) && !have(m)
+                // a copy whose id and kind still exist here but whose examples changed (a partial Remove Example) is copied again
+                let drifted = mine.get("row").and_then(Value::as_array).is_some_and(|r| {
+                    r.iter()
+                        .any(|e| e["id"] == m["id"] && e["from"] == origin.as_str() && e["kind"] == m["kind"])
+                });
+                (ids.is_none_or(|l| l.iter().any(|x| x == id)) || drifted) && !have(m)
             })
             .collect();
         let was_on = self.learn_pick_runs(sid, &target);
