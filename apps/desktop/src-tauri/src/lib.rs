@@ -908,6 +908,7 @@ macro_rules! command_handler {
             learn::track_learn_forget,
             learn::track_learn_set,
             learn::track_learn_scores,
+            learn::track_learn_adopt,
             tempo::tempo_map_get,
             tempo::tempo_map_set,
             tempo::tempo_map_import_midi,

@@ -80,6 +80,14 @@ HT.isMerged = name => HT.on() && HT.merged.has(name);
 HT.srcsOf = name => { const e = HT.on() && HT.fault !== "no-fan-out" && HT.homeOf.get(name); return e ? e.srcs : [name]; };   // no-fan-out: the fault run (a setting reaches the first source only)
 /* The DOM row (the home source) that draws the source `src`, for a click that names a source (a hit, the DAW selection). */
 HT.homeFor = src => { const e = HT.on() && HT.inRow.get(src); return e ? e.home : src; };
+/* #587: the place of a source among the audio files of its DAW track, by the song position of its first clip: {n, of}; null with the mode off or for no row. */
+HT.place = src => {
+  const e = HT.on() && HT.inRow.get(src);
+  if (!e) return null;
+  const first = n => e.clips.reduce((m, c) => (c.src === n ? Math.min(m, c.s) : m), Infinity);
+  const order = e.srcs.slice().sort((a, b) => first(a) - first(b) || e.srcs.indexOf(a) - e.srcs.indexOf(b));
+  return { n: order.indexOf(src) + 1, of: order.length };
+};
 /* The name of the DAW track of a source (the row it is in), for the texts of the page; null with the mode off or for no row. */
 HT.label = src => { const e = HT.on() && HT.inRow.get(src); return e ? e.name : null; };
 

@@ -140,6 +140,28 @@ pub async fn track_learn_set(
     .await
 }
 
+/// Copy the Learn marks of the track `from` to the track `name` (two audio files of one DAW track), see
+/// `Service::track_learn_adopt`.
+///
+/// # Errors
+///
+/// 400 when `name` and `from` are one track, an id is not a mark of `from`, or a kind would hold more than the
+/// maximum number of examples. 404 when the project or a track is unknown. 409 when the project is open
+/// read-only, or a track is offline.
+#[tauri::command]
+pub async fn track_learn_adopt(
+    svc: State<'_, Service>,
+    sid: String,
+    name: String,
+    from: String,
+    ids: Option<Vec<String>>,
+) -> Result<Value, AppError> {
+    blocking(&svc, "track_learn_adopt", move |s| {
+        s.track_learn_adopt(&sid, &name, &from, ids.as_deref())
+    })
+    .await
+}
+
 /// The similarity score of each candidate and each example of the track `name`. A track without
 /// kept candidates answers `{state: "missing"}`, not an error.
 ///

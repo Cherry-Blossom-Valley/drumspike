@@ -159,7 +159,7 @@ function rangeNudge(units) {   // #151: every hit of the range by units x the nu
     for (const e of evs) {
       if (e.t < s.t0 || e.t > s.t1) continue;
       inRange++;
-      const to = Math.max(0, Math.round((e.t + units * nudgeSamples(sr) / sr) * sr) / sr);
+      const to = HT.clampTo(trk, e.t, Math.max(0, Math.round((e.t + units * nudgeSamples(sr) / sr) * sr) / sr));   // #587: a hit stays in its clip, as the nudge of one hit does
       if (to === e.t) continue;
       const j = edIndex(evs, e.id);
       if (j < 0) continue;

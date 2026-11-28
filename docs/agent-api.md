@@ -128,6 +128,10 @@ in the command registry decides; a command that only adds, only sets a value bac
   placement rule like every hit of the track and answers `placement` (`refined`, `coarse`); a time set at the playhead
   stays as it is. `track_learn_scores` gives the similarity score of each detection candidate
   and of each example, and the automatic threshold; it writes only the cache `Analysis/<track>/learn.bin`.
+  `track_learn_adopt {name, from, ids?}` copies the marks of the track `from` to the track `name`, for two audio files of one DAW track: the
+  copy holds the feature vectors of the examples measured on the audio of `from`, so the Learn filter and the Add rule of `name` act on
+  the same pattern. It changes which audio the score reads, not what counts as similar. A copy that exists is skipped; a call that
+  fails changes nothing.
 - `track_velocity_set` also writes the new velocities and cut marks to the stored hits (`apply`, default true here; the page sends
   `apply: false` and applies the answer itself). It recomputes every velocity, so it comes before single-hit velocity edits.
 - Export: `export_all` takes `dest` (an absolute, existing, writable folder; default `Exports/` in the project folder), `midi_mode`

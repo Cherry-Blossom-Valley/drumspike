@@ -57,6 +57,7 @@ function updateStatus() {   // P3-14b: the status bar is short; the info line ha
   selShellSync();   // #158 (rank 9): the selection-dependent menu items follow the selection
   trainingSync();   // #343
   HT.noteOutside();   // #555: the hits that no clip of a DAW track shows (nothing with the mode off)
+  lnRowNote();   // #587: a file of a DAW track that does not follow its Learn marks yet (nothing with the mode off)
 }
 
 /* #343: View > Training Mode. A page setting (SETTINGS().ui.training, off by default, saved with saveSettings): with it
