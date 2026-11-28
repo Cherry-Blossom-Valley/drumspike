@@ -20,6 +20,12 @@
 //! | `track_learn_forget {sid, name}` | remove every mark of the track |
 //! | `track_learn_set {sid, name, learn}` | store the whole `learn` object (the page's undo and redo) |
 //! | `track_learn_scores {sid, name}` | P4-6b: the scores of the candidates and the examples ([`crate::learn_score`]) |
+//! | `track_learn_adopt {sid, name, from, ids?}` | #587: copy the marks of the audio file `from` to the audio file `name` of the same DAW track |
+//!
+//! #587: `learn.row` (optional, only a DAW track makes it) holds the copies of marks that other audio files of the same
+//! DAW track made: `[{id, from, kind, fps: [[f32...]], atk: [ms...]}]`. `fps` are the raw feature vectors of the
+//! examples measured on the audio of `from`, `atk` their attack times. A copy acts through the score only
+//! ([`crate::learn_score::Foreign`]), never through a time rule, so it never takes out an edited hit.
 //!
 //! A follower routes to its source (`routed`); a source that is gone gives 409.
 //!
@@ -37,6 +43,7 @@
 //! does not bring them back, [`crate::learn_filter::note_dropped`]).
 
 use drumspike_core::refine::{FM_PEAK_DB, RefineWindow, refine_rule_peak, refine_sr};
+use drumspike_core::similarity::Recipe;
 use serde_json::{Map, Value, json};
 
 use crate::Service;
@@ -48,7 +55,7 @@ use crate::policy::{Mark, is_marked};
 use crate::registry::{lock, resolve_shared};
 
 /// The commands of this card, as the route map names them.
-pub const LEARN_COMMANDS: [&str; 7] = [
+pub const LEARN_COMMANDS: [&str; 8] = [
     "track_learn_mark",
     "track_learn_remove",
     "track_learn_forget_at",
@@ -56,8 +63,11 @@ pub const LEARN_COMMANDS: [&str; 7] = [
     "track_learn_forget",
     "track_learn_set",
     "track_learn_scores",
+    "track_learn_adopt",
 ];
 
+/// #587: the longest feature vector `learn.row` may hold (a recipe's vector is far shorter).
+const MAX_FP_DIM: usize = 4096;
 /// The most examples of one kind on a track.
 pub const MAX_EXAMPLES: usize = 64;
 /// Two examples closer than this (seconds) are the same hit.
@@ -113,14 +123,30 @@ pub fn counts(learn: &Map<String, Value>) -> (usize, usize) {
 /// P4-6c: true when the filter of this `learn` object cuts: `on` is true and it holds at least one example.
 pub fn filter_on(learn: &Map<String, Value>) -> bool {
     let (this, not) = counts(learn);
-    learn.get("on").and_then(Value::as_bool) == Some(true) && this + not > 0
+    let (rthis, rnot) = row_counts(learn);
+    learn.get("on").and_then(Value::as_bool) == Some(true) && this + not + rthis + rnot > 0
+}
+
+/// #587: the number of examples of each kind that other audio files of the same DAW track made (`learn.row`): `(this, not)`.
+/// `(0, 0)` for a project no DAW track made.
+pub fn row_counts(learn: &Map<String, Value>) -> (usize, usize) {
+    let mut c = (0, 0);
+    for e in learn.get("row").and_then(Value::as_array).into_iter().flatten() {
+        let n = e.get("fps").and_then(Value::as_array).map_or(0, Vec::len);
+        match e.get("kind").and_then(Value::as_str) {
+            Some("this") => c.0 += n,
+            Some("not") => c.1 += n,
+            _ => {}
+        }
+    }
+    c
 }
 
 /// P4-38d: true when the Learn pick of this `learn` object runs: the filter is on ([`filter_on`]),
 /// or it holds a Learn This example (the Add rule runs with the filter off too).
 #[must_use]
 pub fn pick_runs(learn: &Map<String, Value>) -> bool {
-    filter_on(learn) || counts(learn).0 > 0
+    filter_on(learn) || counts(learn).0 + row_counts(learn).0 > 0
 }
 
 /// The `learn` object of a track when its Learn pick runs ([`pick_runs`]), else `None`.
@@ -409,6 +435,38 @@ pub fn check_learn(learn: &Map<String, Value>) -> Result<(), AppError> {
     let (a, b) = counts(learn);
     if a > MAX_EXAMPLES || b > MAX_EXAMPLES {
         return bad(&format!("at most {MAX_EXAMPLES} examples of each kind"));
+    }
+    if let Some(row) = learn.get("row") {
+        let Some(row) = row.as_array() else {
+            return bad("`row` must be a list");
+        };
+        for e in row {
+            let strs = ["id", "from"]
+                .iter()
+                .all(|k| e.get(*k).and_then(Value::as_str).is_some());
+            let kind = matches!(e.get("kind").and_then(Value::as_str), Some("this" | "not"));
+            let fps = e.get("fps").and_then(Value::as_array);
+            let atk = e.get("atk").and_then(Value::as_array);
+            let nums = |a: &[Value]| a.iter().all(|x| x.as_f64().is_some_and(f64::is_finite));
+            let ok = strs
+                && kind
+                && fps.is_some_and(|f| {
+                    f.iter().all(|v| {
+                        v.as_array()
+                            .is_some_and(|v| !v.is_empty() && v.len() <= MAX_FP_DIM && nums(v))
+                    })
+                })
+                && atk.is_some_and(|a| nums(a) && Some(a.len()) == fps.map(Vec::len));
+            if !ok {
+                return bad(
+                    "every `row` entry needs `id`, `from`, `kind`, `fps` (lists of numbers) and `atk` (one number each)",
+                );
+            }
+        }
+        let (c, d) = row_counts(learn);
+        if a + c > MAX_EXAMPLES || b + d > MAX_EXAMPLES {
+            return bad(&format!("at most {MAX_EXAMPLES} examples of each kind"));
+        }
     }
     Ok(())
 }
@@ -1176,6 +1234,10 @@ impl Service {
             let g = lock(&op);
             learn_of(&g.track(name)?.extra).unwrap_or_default()
         };
+        if row_counts(&learn).0 > 0 {
+            // #587: a Learn This example of another file of the DAW track also supports the hits it added here
+            return Ok(0);
+        }
         let this: Vec<f64> = marks_of(&learn)
             .iter()
             .filter(|m| m.get("kind").and_then(Value::as_str) == Some("this"))
@@ -1235,9 +1297,11 @@ impl Service {
                 return Ok((0, 0));
             }
             let (a, b) = counts(l);
-            let n = marks_of(l).len();
+            let n = marks_of(l).len() + l.get("row").and_then(Value::as_array).map_or(0, Vec::len);
             l.insert("marks".into(), json!([])); // the examples only: `on`, `threshold` and `auto` stay for P4-6b
-            Ok((n, a + b))
+            let (c, d) = row_counts(l);
+            l.shift_remove("row"); // #587: the copies of other files' marks are examples of this track too
+            Ok((n, a + b + c + d))
         })?;
         let mut out =
             json!({"forgotten": marks, "examples": examples, "learn": learn, "track": target, "routed": routed});
@@ -1247,6 +1311,119 @@ impl Service {
             let swept = self.sweep_unsupported_learned(sid, &target)?;
             out["swept"] = json!(swept);
         }
+        Ok(out)
+    }
+
+    /// `track_learn_adopt {sid, name, from, ids?}` (#587): copy the marks of the audio file `from` to the audio file `name`,
+    /// two files of one DAW track. The copy holds the feature vectors of the examples measured on the audio of `from`
+    /// (the recipe of `name`) and their attack times, so the rule of the DAW track acts on both files; it changes which
+    /// audio the existing score reads, not what counts as similar. `ids`: the ids of the marks of `from` to copy, else
+    /// every mark of `from` that `name` holds no copy of yet. A copy that exists is skipped (the call is repeatable).
+    /// A first "not" example turns the filter of `name` on as `track_learn_mark` does. Then the hits of `name` are
+    /// marked again. Answers as `track_learn_mark` does, with `adopted` (the number of copies) and `from`.
+    ///
+    /// # Errors
+    ///
+    /// A 400 `AppError` when `name` and `from` are the same track, an id is not a mark of `from`, `from` holds no
+    /// mark to copy, or a kind would hold more than [`MAX_EXAMPLES`] examples (nothing changes then); a 404 for an
+    /// unknown project or track; a 409 for an offline track or a follower whose source is gone, or a read-only project.
+    pub fn track_learn_adopt(
+        &self,
+        sid: &str,
+        name: &str,
+        from: &str,
+        ids: Option<&[String]>,
+    ) -> Result<Value, AppError> {
+        let (target, routed) = self.learn_target(sid, name)?;
+        let (origin, _) = self.learn_target(sid, from)?;
+        if origin == target {
+            return Err(AppError::bad("`from` must be another audio file than `name`"));
+        }
+        let op = self.inner.registry.get_writable(sid)?;
+        resolve_shared(&op);
+        let (mine, theirs) = {
+            let g = lock(&op);
+            (
+                learn_of(&g.track(&target)?.extra).unwrap_or_default(),
+                learn_of(&g.track(&origin)?.extra).unwrap_or_default(),
+            )
+        };
+        let have = |id: &str| {
+            mine.get("row")
+                .and_then(Value::as_array)
+                .is_some_and(|r| r.iter().any(|e| e["id"] == id && e["from"] == origin.as_str()))
+        };
+        let source: Vec<Value> = marks_of(&theirs).to_vec();
+        if let Some(ids) = ids {
+            for id in ids {
+                if !source.iter().any(|m| m["id"] == id.as_str()) {
+                    return Err(AppError::bad(format!("no mark `{id}` on {origin}")));
+                }
+            }
+        }
+        let picked: Vec<Value> = source
+            .into_iter()
+            .filter(|m| {
+                let id = m["id"].as_str().unwrap_or_default();
+                ids.map_or(true, |l| l.iter().any(|x| x == id)) && !have(id)
+            })
+            .collect();
+        let was_on = self.learn_pick_runs(sid, &target);
+        let method = mine
+            .get("method")
+            .and_then(Value::as_str)
+            .filter(|m| Recipe::parse(m).is_some())
+            .unwrap_or(METHOD)
+            .to_string();
+        let recipe = Recipe::parse(&method).expect("checked above");
+        let mut entries: Vec<Value> = Vec::new();
+        if !picked.is_empty() {
+            // the audio of `from`, outside the project lock (a decode may take a while)
+            let st = self.track_state(&op, &origin)?;
+            let d = st.audio.clone()?.decode(&self.inner.media, mix_mode(&st.mix))?;
+            for m in &picked {
+                let ats = ats_of(m);
+                let fps = drumspike_core::similarity::candidate_features(&d.samples, d.sr, &ats, recipe);
+                let short = |v: f32| format!("{v}").parse::<f64>().unwrap_or(0.0);
+                let atk: Vec<f64> = ats
+                    .iter()
+                    .map(|&t| (drumspike_core::velocity::attack_ms(&d.samples, t, d.sr) * 1000.0).round() / 1000.0)
+                    .collect();
+                entries.push(json!({
+                    "id": m["id"], "from": origin, "kind": m["kind"],
+                    "fps": fps.iter().map(|f| f.iter().map(|&v| short(v)).collect::<Vec<f64>>()).collect::<Vec<_>>(),
+                    "atk": atk,
+                }));
+            }
+        }
+        let adopted: usize = entries.iter().map(|e| e["fps"].as_array().map_or(0, Vec::len)).sum();
+        let ((), learn) = self.learn_edit(sid, &target, |l| {
+            if entries.is_empty() {
+                return Ok(());
+            }
+            let not_before = counts(l).1 + row_counts(l).1;
+            let mut row: Vec<Value> = l.get("row").and_then(Value::as_array).cloned().unwrap_or_default();
+            row.extend(entries.iter().cloned());
+            l.insert("row".into(), Value::Array(row));
+            let (a, b) = (counts(l), row_counts(l));
+            if a.0 + b.0 > MAX_EXAMPLES || a.1 + b.1 > MAX_EXAMPLES {
+                return Err(AppError::bad(format!(
+                    "a track holds at most {MAX_EXAMPLES} examples of each kind: use Forget or remove old examples"
+                )));
+            }
+            l.entry("on").or_insert(json!(false));
+            l.entry("threshold").or_insert(json!(0.5));
+            l.entry("auto").or_insert(json!(true));
+            l.entry("method").or_insert(json!(METHOD));
+            if not_before == 0 && row_counts(l).1 > 0 && l.get("on") != Some(&Value::Bool(true)) {
+                // as the first "not" example of a track turns its filter on (K alone never does)
+                l.insert("on".into(), json!(true));
+                l.insert("auto".into(), json!(true));
+            }
+            Ok(())
+        })?;
+        let mut out = json!({"adopted": adopted, "from": origin, "learn": learn, "track": target, "routed": routed});
+        self.learn_refilter(sid, &target, was_on, &mut out);
         Ok(out)
     }
 
@@ -1350,7 +1527,7 @@ fn opt_f64(args: &Value, key: &str) -> Result<Option<f64>, AppError> {
 }
 
 /// R3: the handlers of [`LEARN_COMMANDS`] for [`crate::call::run`].
-pub(crate) const HANDLERS: [crate::call::Route; 7] = crate::call::routes(LEARN_COMMANDS, |s, _, cmd, args| {
+pub(crate) const HANDLERS: [crate::call::Route; 8] = crate::call::routes(LEARN_COMMANDS, |s, _, cmd, args| {
     crate::call::json_reply(cmd, dispatch(s, cmd, args))
 });
 
@@ -1390,6 +1567,22 @@ pub fn dispatch(svc: &Service, cmd: &str, args: &Value) -> Option<Result<Value, 
             "track_learn_flip" => svc.track_learn_flip(sid, name, arg_str(args, "id")?),
             "track_learn_forget" => svc.track_learn_forget(sid, name),
             "track_learn_scores" => svc.track_learn_scores(sid, name),
+            "track_learn_adopt" => {
+                let ids = match args.get("ids") {
+                    None | Some(Value::Null) => None,
+                    Some(Value::Array(a)) => Some(
+                        a.iter()
+                            .map(|v| {
+                                v.as_str()
+                                    .map(str::to_string)
+                                    .ok_or_else(|| AppError::bad("wrong argument `ids` (list of strings)"))
+                            })
+                            .collect::<Result<Vec<String>, AppError>>()?,
+                    ),
+                    Some(_) => return Err(AppError::bad("wrong argument `ids` (list of strings)")),
+                };
+                svc.track_learn_adopt(sid, name, arg_str(args, "from")?, ids.as_deref())
+            }
             "track_learn_set" => svc.track_learn_set_events(
                 sid,
                 name,

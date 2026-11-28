@@ -175,6 +175,7 @@ fn row_args(row: &api::CommandSpec, s: &Session) -> Value {
             ("kind", _) => json!("this"),
             ("id", _) => json!("m1"),
             ("track", _) => json!(KICK),
+            ("from", _) => json!(SNARE), // #587: track_learn_adopt copies the marks of another track
             ("folder", _) => json!(s.daw.display().to_string()),
             ("path", _) if row.name == "project_relink" => json!(s.wav.display().to_string()),
             ("path", _) if row.name == "tempo_map_import_midi" => json!("x.mid"),

@@ -859,6 +859,7 @@ const ALLOWED: [&str; 77] = [
     "track_learn_forget",
     "track_learn_set",
     "track_learn_scores",
+    "track_learn_adopt",
     "tempo_map_get",
     "tempo_map_set",
     "tempo_map_detect",

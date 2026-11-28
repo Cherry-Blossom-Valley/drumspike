@@ -617,6 +617,8 @@ fn every_mcp_answer_validates_against_its_output_schema_and_every_tool_and_batch
             "track_learn_mark",
             sd(json!({"name": k, "kind": "not", "t0": 0.7, "t1": 0.8})),
         ),
+        // #587: the marks of one audio file copied to another audio file of the same DAW track
+        ("track_learn_adopt", sd(json!({"name": s, "from": k}))),
         ("track_learn_flip", sd(json!({"name": k, "id": "m1"}))),
         ("track_learn_remove", sd(json!({"name": k, "id": "m1"}))),
         ("track_learn_forget_at", sd(json!({"name": k, "t0": 0.7, "t1": 0.8}))),

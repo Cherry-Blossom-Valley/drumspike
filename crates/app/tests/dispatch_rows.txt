@@ -1126,6 +1126,18 @@ track_learn_set null
 track_learn_set wrong
   page: err 400 missing or wrong argument `sid` (string)
   agent: err 400 wrong argument `sid`: expected string
+track_learn_adopt {}
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+track_learn_adopt min
+  page: err 404 no such project
+  agent: err 404 no such project
+track_learn_adopt null
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 missing argument `sid` (string)
+track_learn_adopt wrong
+  page: err 400 missing or wrong argument `sid` (string)
+  agent: err 400 wrong argument `sid`: expected string
 track_learn_scores {}
   page: err 400 missing or wrong argument `sid` (string)
   agent: err 400 missing argument `sid` (string)

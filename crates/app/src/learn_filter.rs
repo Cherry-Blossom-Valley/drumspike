@@ -29,8 +29,8 @@ use crate::edit::{MERGE_WINDOW, is_kept};
 use crate::histogram::{analysis_values, dsp_detection_candidates};
 use crate::learn::{METHOD, filter_on, learn_of_track, shift_s_of};
 use crate::learn_score::{
-    Centre, candidate_frames, effective_threshold, example_times, frame_values, learn_key, read_learn, score_all,
-    solid_frames, write_learn,
+    Centre, Foreign, candidate_frames, effective_threshold, example_times, frame_values, learn_key, read_learn,
+    score_all_with, solid_frames, write_learn,
 };
 use crate::policy::{Mark, clear, is_marked, mark};
 use crate::registry::{Shared, lock};
@@ -81,11 +81,26 @@ pub fn forget_attack_gate(out: &mut [bool], attacks: &[f64], marks_ms: &[f64], b
 /// "not" examples and no "this" example, the only case the gate runs in [`learn_pick`].
 #[must_use]
 pub fn attack_gate_kept(x: &[f32], sr: u32, times: &[f64], this: &[f64], not: &[f64]) -> Vec<bool> {
-    if !this.is_empty() || not.is_empty() {
+    attack_gate_kept_with(x, sr, times, this, not, &Foreign::default())
+}
+
+/// #587: [`attack_gate_kept`] where the marks of the other files of the DAW track (`foreign`) count too: they make a
+/// Forget-only track with their attack times (measured on their audio), and any "this" example of them turns the gate off.
+#[must_use]
+pub fn attack_gate_kept_with(
+    x: &[f32],
+    sr: u32,
+    times: &[f64],
+    this: &[f64],
+    not: &[f64],
+    foreign: &Foreign,
+) -> Vec<bool> {
+    if !this.is_empty() || !foreign.this.is_empty() || (not.is_empty() && foreign.not.is_empty()) {
         return vec![false; times.len()];
     }
     let det: Vec<(f64, u8)> = times.iter().map(|&t| (t, 0)).collect();
-    let marks_ms: Vec<f64> = not.iter().map(|&n| attack_ms(x, n, sr)).collect();
+    let mut marks_ms: Vec<f64> = not.iter().map(|&n| attack_ms(x, n, sr)).collect();
+    marks_ms.extend(&foreign.not_atk_ms);
     let attacks: Vec<f64> = times.iter().map(|&t| attack_ms(x, t, sr)).collect();
     let by_not = mark_out(&det, &[], &[], 0.0, &[], not, &[]);
     let mut out = vec![true; times.len()];
@@ -107,8 +122,15 @@ pub struct AttackProfile {
 /// [`forget_attack_gate`]).
 #[must_use]
 pub fn attack_profile(x: &[f32], sr: u32, times: &[f64], not: &[f64]) -> AttackProfile {
+    attack_profile_with(x, sr, times, not, &Foreign::default())
+}
+
+/// #587: [`attack_profile`] with the marks of the other files of the DAW track.
+#[must_use]
+pub fn attack_profile_with(x: &[f32], sr: u32, times: &[f64], not: &[f64], foreign: &Foreign) -> AttackProfile {
     let attacks = times.iter().map(|&t| attack_ms(x, t, sr)).collect();
-    let marks_ms: Vec<f64> = not.iter().map(|&n| attack_ms(x, n, sr)).collect();
+    let mut marks_ms: Vec<f64> = not.iter().map(|&n| attack_ms(x, n, sr)).collect();
+    marks_ms.extend(&foreign.not_atk_ms);
     let (lo, hi) = marks_ms
         .iter()
         .fold((f64::MAX, f64::MIN), |(lo, hi), &m| (lo.min(m), hi.max(m)));
@@ -246,7 +268,8 @@ pub fn learn_pick(
     let (this, not) = example_times(learn);
     let solid = solid_frames(&frame_values(rows, &frames), sens);
     let extra = |t: f64| similarity::candidate_features(x, sr, &[t], recipe).into_iter().next();
-    let scored = score_all(
+    let foreign = Foreign::of(learn, recipe);
+    let scored = score_all_with(
         &frames,
         &feats,
         recipe,
@@ -256,6 +279,7 @@ pub fn learn_pick(
         &this,
         &not,
         &extra,
+        &foreign,
     );
     let detector = Detector::Candidates {
         cands,
@@ -271,9 +295,11 @@ pub fn learn_pick(
     let mut out = if filter_on(learn) {
         let threshold = effective_threshold(learn, &scored);
         let mut out = mark_out(&det, &frames, &scored.scores, threshold, &this, &not, edited);
-        if this.is_empty() && !not.is_empty() {
+        if this.is_empty() && foreign.this.is_empty() && (!not.is_empty() || !foreign.not.is_empty()) {
             // #293 (B8): Forget marks alone: a score-marked hit goes only at an attack time near the marks' attack
-            let marks_ms: Vec<f64> = not.iter().map(|&n| attack_ms(x, n, sr)).collect();
+            // (#587: the marks of the other files of the DAW track count with the attack time measured on their audio)
+            let mut marks_ms: Vec<f64> = not.iter().map(|&n| attack_ms(x, n, sr)).collect();
+            marks_ms.extend(&foreign.not_atk_ms);
             let attacks: Vec<f64> = det.iter().map(|&(t, _)| attack_ms(x, t, sr)).collect();
             let by_not = mark_out(&det, &frames, &[], threshold, &[], &not, &[]);
             forget_attack_gate(&mut out, &attacks, &marks_ms, &by_not);

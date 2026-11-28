@@ -139,6 +139,7 @@ function ipcBackend(T) {
     /* P4-6c: the scores of the candidates and the examples (crates/app/src/learn_score.rs):
        {state, track, routed, method, candidates: [[t, class, score, v]], examples: {this, not}, auto, threshold, cache, ms} */
     learnScores: (sid, name) => invoke("track_learn_scores", { sid, name }),
+    learnAdopt: (sid, name, from, ids) => invoke("track_learn_adopt", { sid, name, from, ...(ids ? { ids } : {}) }),   // #587
     /* P4-8: the tempo and meter map (crates/app/src/tempo.rs). tempoMapGet: {map, default}; tempoMapSet (the whole map, null or {} is
        the default): {map, previous, changed}, previous null when the stored value was not valid; tempoMapDetect: a suggestion
        (read only; the page accepts it with tempoMapSet); tempoMapImportMidi: {map, previous, changed, tempo_events, meter_events,

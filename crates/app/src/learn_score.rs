@@ -274,6 +274,7 @@ fn score_once(
     this: &[f64],
     not: &[f64],
     extra: &dyn Fn(f64) -> Option<Vec<f32>>,
+    foreign: &Foreign,
 ) -> Scored {
     let prep = |f: &[f32]| -> Vec<f32> {
         match mean {
@@ -289,8 +290,11 @@ fn score_once(
             None => extra(t).map(|f| prep(&f)),
         }
     };
-    let pos: Vec<Vec<f32>> = this.iter().filter_map(|&t| example(t)).collect();
-    let neg: Vec<Vec<f32>> = not.iter().filter_map(|&t| example(t)).collect();
+    let mut pos: Vec<Vec<f32>> = this.iter().filter_map(|&t| example(t)).collect();
+    let mut neg: Vec<Vec<f32>> = not.iter().filter_map(|&t| example(t)).collect();
+    // #587: the examples that a file of the same DAW track made, measured on that file's audio, prepared on this track's mean
+    pos.extend(foreign.this.iter().map(|f| prep(f)));
+    neg.extend(foreign.not.iter().map(|f| prep(f)));
     let pr: Vec<&[f32]> = pos.iter().map(Vec::as_slice).collect();
     let nr: Vec<&[f32]> = neg.iter().map(Vec::as_slice).collect();
     // #293: Forget marks and no "this" example: a candidate goes only when it is closer to a mark than to the
@@ -351,7 +355,36 @@ pub fn score_all(
     not: &[f64],
     extra: &dyn Fn(f64) -> Option<Vec<f32>>,
 ) -> Scored {
-    let once = |mean: Option<&[f32]>| score_once(frames, feats, recipe, w, mean, solid, this, not, extra);
+    score_all_with(
+        frames,
+        feats,
+        recipe,
+        w,
+        centre,
+        solid,
+        this,
+        not,
+        extra,
+        &Foreign::default(),
+    )
+}
+
+/// #587: [`score_all`] with the examples of the other audio files of the same DAW track (`foreign`). An empty
+/// [`Foreign`] takes exactly the path of [`score_all`].
+#[allow(clippy::too_many_arguments)]
+pub fn score_all_with(
+    frames: &[u32],
+    feats: &[f32],
+    recipe: Recipe,
+    w: &Weights,
+    centre: Centre,
+    solid: &[bool],
+    this: &[f64],
+    not: &[f64],
+    extra: &dyn Fn(f64) -> Option<Vec<f32>>,
+    foreign: &Foreign,
+) -> Scored {
+    let once = |mean: Option<&[f32]>| score_once(frames, feats, recipe, w, mean, solid, this, not, extra, foreign);
     let track = || similarity::track_mean(feats, recipe);
     match centre {
         Centre::None => once(None),
@@ -369,6 +402,7 @@ pub fn score_all(
         }
         Centre::Bleed => {
             let first = once(Some(&track()));
+            // #587: a foreign example is no candidate of this track, so it never leaves the bleed set
             let examples: Vec<usize> = this
                 .iter()
                 .chain(not)
@@ -387,6 +421,58 @@ pub fn score_all(
                 once(Some(&similarity::track_mean(&bleed, recipe)))
             }
         }
+    }
+}
+
+/// #587: the examples that another audio file of the same DAW track made. A copy of a mark (`learn.row`) holds the
+/// raw feature vectors of its examples, measured on the audio of the file where the mark was made, and the attack
+/// time of each. They act through the score only: a time of that file means nothing in this one, so no time rule
+/// (a "this" example keeps a hit, the nearest hit to a "not" example goes) reads them. Empty for every project that
+/// no DAW track made.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Foreign {
+    /// The raw vectors of the "this" examples.
+    pub this: Vec<Vec<f32>>,
+    /// The raw vectors of the "not" examples.
+    pub not: Vec<Vec<f32>>,
+    /// The attack time (ms) of each "not" example, on the audio of the file that made it.
+    pub not_atk_ms: Vec<f64>,
+}
+
+impl Foreign {
+    /// The foreign examples of a `learn` object (`learn.row`); a vector whose length is not `recipe.len()` is left out.
+    #[must_use]
+    pub fn of(learn: &serde_json::Map<String, Value>, recipe: Recipe) -> Foreign {
+        let mut f = Foreign::default();
+        for e in learn.get("row").and_then(Value::as_array).into_iter().flatten() {
+            let fps = e.get("fps").and_then(Value::as_array).map_or(&[][..], Vec::as_slice);
+            let atk = e.get("atk").and_then(Value::as_array).map_or(&[][..], Vec::as_slice);
+            let kind = e.get("kind").and_then(Value::as_str);
+            for (i, fp) in fps.iter().enumerate() {
+                let v: Vec<f32> = fp
+                    .as_array()
+                    .map(|a| a.iter().filter_map(|x| x.as_f64().map(|x| x as f32)).collect())
+                    .unwrap_or_default();
+                if v.len() != recipe.len() {
+                    continue;
+                }
+                match kind {
+                    Some("this") => f.this.push(v),
+                    Some("not") => {
+                        f.not.push(v);
+                        f.not_atk_ms.push(atk.get(i).and_then(Value::as_f64).unwrap_or(0.0));
+                    }
+                    _ => {}
+                }
+            }
+        }
+        f
+    }
+
+    /// True when there is no foreign example.
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.this.is_empty() && self.not.is_empty()
     }
 }
 
@@ -604,7 +690,8 @@ impl Service {
             crate::sensitivity::sensitivity_of(&p.params.thresholds).round()
         });
         let solid = solid_frames(&frame_values(&cands, &frames), sens);
-        let scored = score_all(
+        let foreign = Foreign::of(&learn, recipe);
+        let scored = score_all_with(
             &frames,
             &feats,
             recipe,
@@ -614,19 +701,28 @@ impl Service {
             &this,
             &not,
             &extra_of(&d, recipe),
+            &foreign,
         );
         // #293 (B8): the gate of a Forget-only track reads the attacks of the audio the pick reads (the decoded source)
         let times: Vec<f64> = cands.iter().map(|r| r[0].as_f64().unwrap_or(0.0)).collect();
-        let (gate, attack) = if this.is_empty() && !not.is_empty() {
-            let dd = decode()?;
-            let gate = crate::learn_filter::attack_gate_kept(&dd.samples, dd.sr, &times, &this, &not);
-            (
-                gate,
-                Some(crate::learn_filter::attack_profile(&dd.samples, dd.sr, &times, &not)),
-            )
-        } else {
-            (vec![false; times.len()], None)
-        };
+        let (gate, attack) =
+            if this.is_empty() && foreign.this.is_empty() && (!not.is_empty() || !foreign.not.is_empty()) {
+                let dd = decode()?;
+                let gate =
+                    crate::learn_filter::attack_gate_kept_with(&dd.samples, dd.sr, &times, &this, &not, &foreign);
+                (
+                    gate,
+                    Some(crate::learn_filter::attack_profile_with(
+                        &dd.samples,
+                        dd.sr,
+                        &times,
+                        &not,
+                        &foreign,
+                    )),
+                )
+            } else {
+                (vec![false; times.len()], None)
+            };
         Ok(Ok(LearnCtx {
             target,
             routed,

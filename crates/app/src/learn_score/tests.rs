@@ -378,3 +378,65 @@ fn a_forget_mark_alone_takes_only_the_candidates_closer_to_it_than_to_the_confir
     assert_eq!(s.scores[2], 0.5, "near the mark but closer to the template: stays");
     assert_eq!(s.scores[4], 0.5, "far from the mark: stays");
 }
+
+/// #587: an empty `Foreign` takes the path of `score_all` (the standalone proof), and a non-empty one reaches the score (so
+/// the empty one proves something: the check can fire).
+#[test]
+fn an_empty_foreign_is_the_old_score_and_a_foreign_example_changes_it() {
+    let recipe = Recipe::Patch;
+    let dim = recipe.len();
+    let frames: Vec<u32> = (0..6).map(|i| 10 * (i + 1)).collect();
+    let feats: Vec<f32> = (0..6 * dim)
+        .map(|i| ((i * 7 % 13) as f32) / 13.0 + (i / dim) as f32 * 0.1)
+        .collect();
+    let none = |_: f64| None;
+    let run = |f: &Foreign| {
+        score_all_with(
+            &frames,
+            &feats,
+            recipe,
+            &Weights::DEFAULT,
+            Centre::Track,
+            &[],
+            &[],
+            &[],
+            &none,
+            f,
+        )
+    };
+    let old = score_all(
+        &frames,
+        &feats,
+        recipe,
+        &Weights::DEFAULT,
+        Centre::Track,
+        &[],
+        &[],
+        &[],
+        &none,
+    );
+    assert_eq!(run(&Foreign::default()), old);
+    let mut f = Foreign::default();
+    f.not.push(feats[..dim].to_vec());
+    f.not_atk_ms.push(1.0);
+    let with = run(&f);
+    assert_ne!(with.scores, old.scores, "a foreign example moves the scores");
+    assert!(
+        with.scores[0] < with.scores[5],
+        "the candidate like the example scores lower: {:?}",
+        with.scores
+    );
+}
+
+#[test]
+fn foreign_reads_the_row_of_a_learn_object_and_skips_a_vector_of_the_wrong_length() {
+    let dim = Recipe::Patch.len();
+    let learn = json!({"row": [
+        {"id": "m1", "from": "a", "kind": "not", "fps": [vec![0.5; dim], vec![0.5; 3]], "atk": [2.0, 3.0]},
+        {"id": "m2", "from": "a", "kind": "this", "fps": [vec![0.1; dim]], "atk": [1.0]},
+    ]});
+    let f = Foreign::of(learn.as_object().unwrap(), Recipe::Patch);
+    assert_eq!((f.this.len(), f.not.len(), f.not_atk_ms.clone()), (1, 1, vec![2.0]));
+    assert!(Foreign::of(&serde_json::Map::new(), Recipe::Patch).is_empty());
+    assert!(!f.is_empty());
+}

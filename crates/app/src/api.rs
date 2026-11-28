@@ -386,6 +386,11 @@ const CLASSES: &[(&str, bool, &str)] = &[
     ),
     ("track_learn_mark", false, "only adds a mark or an example"),
     (
+        "track_learn_adopt",
+        false,
+        "only adds copies of marks; track_learn_set with the learn before takes them back",
+    ),
+    (
         "track_learn_flip",
         false,
         "changes the kind of a mark; flipping sets it back",
@@ -1730,6 +1735,28 @@ pub static REGISTRY: &[CommandSpec] = &[
             ),
         ],
         r#"{"type":"object","required":["learn","track","routed"]}"#,
+        Doc,
+        Agent,
+        Quick,
+    ),
+    cmd(
+        "track_learn_adopt",
+        "Copy the Learn marks of one audio file to another audio file of the same DAW track (the rule then acts on both)",
+        &[
+            SID,
+            NAME,
+            req(
+                "from",
+                Ty::Str,
+                "The track where the marks were made (another track of the project)",
+            ),
+            opt(
+                "ids",
+                Ty::Any,
+                "The ids of the marks of `from` to copy (a list); without it every mark that NAME holds no copy of",
+            ),
+        ],
+        r#"{"type":"object","required":["adopted","from","learn","track","routed"]}"#,
         Doc,
         Agent,
         Quick,
