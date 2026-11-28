@@ -24,10 +24,11 @@
 //! `edit-round` and `refuse` after the page's report, in `analyse-race` when the page's own
 //! analysis has started. `--wait-sync` (mode `edit`): after the edit the host waits for the row
 //! `page_sync` of the plugin's worker (without the scenario `sync-delay`).
-//! `--trigger-blind-ms <n>` (#583): for the first n ms of the wait the trigger of the late files does not see the page's
-//! report, but the end of the run does. That is the order of events that a loaded machine gives now and then (the report lands
-//! after the trigger was looked at and before the end of the same loop turn), made certain. `--end-on-report` (a fault of the
-//! check): the mode `refuse` ends at the report, as it did before #583.
+//! `--trigger-blind` (#583, #605): the trigger of the late files does not see the page's report until the END of the run
+//! has seen it. That is the order of events that a loaded machine gives now and then (the report lands after the trigger was
+//! looked at and before the end of the same loop turn), made certain by the event and not by a time (a fixed blind time of
+//! 1.5 s could end before the report on a loaded machine, and the fault run then failed for another reason). `--end-on-report`
+//! (a fault of the check): the mode `refuse` ends at the report, as it did before #583.
 //! ```
 //! Keys and clicks are real `NSEvent`s through `[NSApp sendEvent:]` (the S2 finding: the
 //! window server path needs the accessibility trust).
@@ -647,9 +648,7 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
     let no_ara = arg_flag(rest, "--no-ara");
     let late_files = args_list(rest, "--late-files");
     let wait_sync = arg_flag(rest, "--wait-sync");
-    let blind_ms: u64 = args_value(rest, "--trigger-blind-ms")
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(0);
+    let trigger_blind = arg_flag(rest, "--trigger-blind");
     let end_on_report = arg_flag(rest, "--end-on-report");
     let store_at_edit = args_value(rest, "--store-at-edit");
     // M1b10 (mode `names`): after the page's first report the host renames region sequences
@@ -1021,6 +1020,8 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
             let refuse_before = count_rows("page_report", Some("refuse"));
             let started_before = count_rows("page_report", Some("analyse-started"));
             let mut late_done = false;
+            // #605: the end of the run has seen the page's report (the blind trigger waits for exactly this event)
+            let mut end_saw_report = false;
             let mut access_done = false;
             let jobs_at_start = count_rows("job", None);
             let mut edit_handled = false;
@@ -1363,7 +1364,7 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                         "edit-round" => count_rows("page_report", Some("edit")) > edits_before,
                         "refuse" => {
                             count_rows("page_report", Some("refuse")) > refuse_before
-                                && t0.elapsed() >= Duration::from_millis(blind_ms)
+                                && (!trigger_blind || end_saw_report)
                         }
                         "analyse-race" => count_rows("page_report", Some("analyse-started")) > started_before,
                         _ => false,
@@ -1457,6 +1458,9 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                 }
                 pump(&app);
                 let ready_now = count_rows("page_ready", None) > ready_before;
+                if want_kind == Some("refuse") && count_rows("page_report", Some("refuse")) > refuse_before {
+                    end_saw_report = true;
+                }
                 let done = match want_kind {
                     Some("analyse") if destroy_late.is_some() => {
                         count_rows("page_report", Some("analyse")) > reports_before

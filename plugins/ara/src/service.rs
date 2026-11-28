@@ -664,7 +664,7 @@ fn call_busy<T>(
 
 /// The test seam of the busy path: a service call that answers 409 as often as a test says (this thread only).
 #[cfg(test)]
-mod busy_test {
+pub(crate) mod busy_test {
     use std::cell::Cell;
     thread_local! {
         /// Calls that still answer 409 (`u32::MAX`: for ever).
@@ -1885,7 +1885,7 @@ pub fn events_line(events: &serde_json::Map<String, Value>) -> String {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     #[test]
@@ -2922,7 +2922,7 @@ mod tests {
     }
 
     /// A restored track whose cache file is back but whose record has no identity (status `changed`), with its service.
-    fn changed_restored_track(name: &str) -> (std::path::PathBuf, DocService, SourceSnapshot) {
+    pub(crate) fn changed_restored_track(name: &str) -> (std::path::PathBuf, DocService, SourceSnapshot) {
         let cache = scratch(name);
         let id = new_doc_id();
         let mut doc = DocService::new(cache.clone(), id.clone());

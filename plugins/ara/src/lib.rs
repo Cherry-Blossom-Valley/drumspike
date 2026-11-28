@@ -219,6 +219,12 @@ struct SourceState {
     /// #586: how often the service was busy for the repair (409) and it was planned again. Its own count: many busy
     /// tries must not use up the wait for the restore (and the other way round).
     repair_busy: std::sync::atomic::AtomicU32,
+    /// #605: the repair gave up on a busy service and a late try is owed: ONE try at the next real trigger (the end of
+    /// a round of the document, or the end of the wait for a job of the page). Cleared by the try; a try that is busy
+    /// again sets it again and waits for the next trigger. Nothing polls.
+    repair_late: AtomicBool,
+    /// #605: the one more row of a late try that was busy again is written (at most one per restore).
+    repair_late_row: AtomicBool,
     /// When the worker took the request that still waits for the audio of this source.
     requested_at: Mutex<Option<std::time::Instant>>,
     /// M1b10: the role that the DAW name gave at the last snapshot. A new name that gives another
@@ -2167,6 +2173,9 @@ fn services_row() -> String {
 struct WorkerState {
     /// Since when the round of a document waits for a job of the page (by document id).
     deferred_since: std::collections::HashMap<String, std::time::Instant>,
+    /// #605: documents whose round waits for a running job of the page (by document id); the end of that wait is a trigger of the
+    /// late try of the repair.
+    job_waited: std::collections::HashSet<String>,
     /// Sources that asked for the analysis and still need it.
     requested: Vec<Arc<SourceState>>,
     /// Documents that need a round without a new request, with the reason (`removal`: a
@@ -2556,6 +2565,7 @@ impl Session {
                         for t in &targets {
                             t.life.deferred.store(true, Ordering::SeqCst); // #593: Retry is refused while the round waits
                         }
+                        st.job_waited.insert(doc.id());
                         defer_msg(Msg::Defer {
                             doc: doc.clone(),
                             targets: targets.clone(),
@@ -2564,6 +2574,11 @@ impl Session {
                         });
                         st.current.clear();
                         continue;
+                    }
+                    if st.job_waited.remove(&doc.id()) {
+                        // #605: trigger 2, the round waited for a job of the page and none runs any more (a wait for
+                        // another reason, a 409 of the round, is no such trigger: it would try every 100 ms)
+                        self.late_repair(&doc);
                     }
                     let allow = since.elapsed() < std::time::Duration::from_secs(600)
                         && crate::test_switch("DS_ARA_ROUND_FAULT").as_deref() != Ok("no-page-wait");
@@ -2588,6 +2603,7 @@ impl Session {
                         t.life.deferred.store(false, Ordering::SeqCst);
                     }
                     self.plan_retry(&doc, st);
+                    self.late_repair(&doc); // #605: trigger 1, a round of the document ended
                 }
                 settled = false;
             }
@@ -2717,8 +2733,67 @@ impl Session {
                     .to_string(),
                 );
                 self.write_out();
+                if why == "busy" {
+                    s.repair_late.store(true, Ordering::SeqCst); // #605: one late try at the next real trigger
+                }
             }
-            RepairPlan::Nothing => {}
+            RepairPlan::Nothing => {
+                // a read after the limit that finds the service busy again: the late try stays owed
+                if r == Repair::Busy {
+                    s.repair_late.store(true, Ordering::SeqCst);
+                }
+            }
+        }
+    }
+
+    /// #605: the LATE TRY of the repair. After the busy limit (about 10 s) a restored track stayed offline until a
+    /// later read or a press of Retry. Now the worker makes ONE more try per real trigger, for each source of the
+    /// document that owes one: (1) a round of the document ended (the loop of the worker, after the round), (2) the wait
+    /// for a job of the page ended (a round or a removal of the document that was deferred finds no job running any
+    /// more). No timer, no loop: a try that is busy again waits for the next trigger and writes at most ONE more row.
+    /// A source that owes nothing (online, removed, or no repair mark) costs no call of the service. It runs on the
+    /// worker and calls the service with one try, so nothing sleeps with the lock held and the main thread and the
+    /// audio thread are not touched. (`DS_ARA_RESTORE_FAULT=no-late-try`: the old behaviour, no late try.)
+    fn late_repair(&self, doc: &Arc<DocShared>) {
+        if crate::test_switch("DS_ARA_RESTORE_FAULT").as_deref() == Ok("no-late-try")
+            || doc.closing.load(Ordering::SeqCst)
+        {
+            return;
+        }
+        let members: Vec<Arc<SourceState>> = doc
+            .members
+            .lock()
+            .map(|m| m.iter().filter_map(std::sync::Weak::upgrade).collect())
+            .unwrap_or_default();
+        for s in members.iter().filter(|s| !s.removed.load(Ordering::SeqCst)) {
+            if !s.repair.load(Ordering::SeqCst) || !s.repair_late.swap(false, Ordering::SeqCst) {
+                continue;
+            }
+            // the late try writes no wait row of its own: the give-up row was the one
+            let _ = s
+                .repair_tries
+                .compare_exchange(0, 1, Ordering::SeqCst, Ordering::SeqCst);
+            match self.repair_restored(s) {
+                Repair::Busy => {
+                    s.repair_late.store(true, Ordering::SeqCst);
+                    if !s.repair_late_row.swap(true, Ordering::SeqCst) {
+                        self.log(
+                            json!({"event": "track_repair_failed", "doc": s.doc.id(), "name": s.props().name,
+                                "error": "gave up", "why": "busy", "late": true})
+                            .to_string(),
+                        );
+                        self.write_out();
+                    }
+                }
+                Repair::Wait => s.repair_late.store(true, Ordering::SeqCst),
+                Repair::Done => {
+                    self.log(
+                        json!({"event": "track_repair_late", "doc": s.doc.id(), "name": s.props().name}).to_string(),
+                    );
+                    doc.states_changed();
+                }
+                _ => {}
+            }
         }
     }
 
@@ -4568,6 +4643,8 @@ unsafe extern "C" fn dc_createAudioSource(
                 repair: AtomicBool::new(false),
                 repair_tries: std::sync::atomic::AtomicU32::new(0),
                 repair_busy: std::sync::atomic::AtomicU32::new(0),
+                repair_late: AtomicBool::new(false),
+                repair_late_row: AtomicBool::new(false),
                 requested_at: Mutex::new(None),
                 label_role_seen: Mutex::new(None),
                 role_touch_pending: AtomicBool::new(false),
@@ -5621,6 +5698,8 @@ unsafe extern "C" fn dc_restoreObjectsFromArchive(
                     src.restored_count.store(a.sample_count, Ordering::SeqCst);
                     src.repair_tries.store(0, Ordering::SeqCst);
                     src.repair_busy.store(0, Ordering::SeqCst);
+                    src.repair_late.store(false, Ordering::SeqCst);
+                    src.repair_late_row.store(false, Ordering::SeqCst);
                     src.repair.store(true, Ordering::SeqCst);
                     if let Some((_, events)) = events_ok.iter().find(|(k, _)| **k == track) {
                         if let Ok(mut t) = src.track.lock() {
@@ -6822,6 +6901,8 @@ mod tests {
             repair: AtomicBool::new(false),
             repair_tries: std::sync::atomic::AtomicU32::new(0),
             repair_busy: std::sync::atomic::AtomicU32::new(0),
+            repair_late: AtomicBool::new(false),
+            repair_late_row: AtomicBool::new(false),
             requested_at: Mutex::new(None),
             label_role_seen: Mutex::new(None),
             role_touch_pending: AtomicBool::new(false),
@@ -8071,6 +8152,73 @@ mod tests {
         for r in [Repair::Done, Repair::Stop, Repair::Skip, Repair::Stale] {
             assert_eq!(repair_plan(r, &wait, &busy), RepairPlan::Nothing);
         }
+    }
+
+    #[test]
+    fn a_repair_that_gave_up_on_a_busy_service_makes_one_late_try_per_trigger_and_never_loops() {
+        // #605: the repair gives up after the busy limit (one row). The late try then runs once per trigger
+        // (`late_repair`: the end of a round, the end of the wait for a job of the page), is busy again at most one more
+        // row, and brings the track online when the service is free. The fault run: `DS_ARA_RESTORE_FAULT=no-late-try`
+        // fails this test with "no late try after the trigger".
+        let (_cache, svc, snap) = service::tests::changed_restored_track("late-try");
+        let doc = DocShared::new();
+        *doc.lock_svc() = svc;
+        let src = restored_source(&doc, Some(7), 1000);
+        *src.content_hash.lock().unwrap() = Some(7);
+        *src.wav.lock().unwrap() = Some(snap.wav.clone());
+        doc.members.lock().unwrap().push(Arc::downgrade(&src));
+        let rows = |ev: &str| -> usize {
+            let id = doc.id();
+            session()
+                .rows
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|r| r.contains(ev) && r.contains(&id))
+                .count()
+        };
+        let calls = || service::busy_test::CALLS.with(|c| c.get());
+        service::busy_test::reset(u32::MAX);
+        // the busy tries up to the limit: no late try is owed before the limit is reached
+        for _ in 0..REPAIR_BUSY_TRIES {
+            session().repair_and_retry(&src);
+        }
+        assert!(!src.repair_late.load(Ordering::SeqCst), "not owed before the limit");
+        session().late_repair(&doc);
+        assert_eq!(calls(), REPAIR_BUSY_TRIES, "a trigger before the limit costs no call");
+        session().repair_and_retry(&src); // the try that reaches the limit: ONE row
+        assert_eq!(rows("\"gave up\""), 1);
+        assert!(src.repair_late.load(Ordering::SeqCst), "the give-up owes one late try");
+        // a later read of the audio finds the service busy again: still one row, the late try stays owed
+        session().repair_and_retry(&src);
+        assert_eq!(rows("\"gave up\""), 1);
+        let before = calls();
+        // trigger 1: ONE try, busy again: at most one more row, still owed
+        session().late_repair(&doc);
+        assert_eq!(calls(), before + 1, "one try per trigger, no sleep");
+        assert_eq!(service::busy_test::SLEEPS.with(|c| c.get()), 0);
+        assert_eq!(rows("\"gave up\""), 2, "the late try wrote the one more row");
+        assert!(src.repair_late.load(Ordering::SeqCst) && src.repair.load(Ordering::SeqCst));
+        // trigger 2: ONE more try, no third row
+        session().late_repair(&doc);
+        assert_eq!(calls(), before + 2);
+        assert_eq!(rows("\"gave up\""), 2, "at most one more row");
+        // no trigger, no call: nothing polls
+        assert_eq!(calls(), before + 2);
+        // the service is free: the next trigger repairs the track and owes nothing
+        service::busy_test::reset(0);
+        session().late_repair(&doc);
+        assert!(
+            !src.repair.load(Ordering::SeqCst),
+            "the late try brought the track online: no late try after the trigger"
+        );
+        assert!(!src.repair_late.load(Ordering::SeqCst));
+        assert_eq!(rows("track_repair_late"), 1);
+        assert_eq!(rows("\"event\":\"track_repair\""), 1);
+        // an online track costs nothing at the next trigger
+        let after = calls();
+        session().late_repair(&doc);
+        assert_eq!(calls(), after, "a repaired track makes no call");
     }
 
     #[test]
