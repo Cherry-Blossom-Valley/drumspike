@@ -129,6 +129,7 @@ pub fn filter_on(learn: &Map<String, Value>) -> bool {
 
 /// #587: own examples plus copies of other files' examples, per kind: `(this, not)`. The one count of the cap and of the
 /// first-"not" rules.
+#[must_use]
 pub fn total_counts(learn: &Map<String, Value>) -> (usize, usize) {
     let (a, b) = counts(learn);
     let (c, d) = row_counts(learn);
