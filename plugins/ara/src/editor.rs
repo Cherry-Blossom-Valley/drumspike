@@ -804,7 +804,7 @@ const REFUSED_NOT_HERE_2: [&str; 1] = ["output_select"];
 /// document, its `Exports/` and `Analysis/` folders, the home of the document's service), or
 /// reads. The commands that name a folder or a file to write (`dest`, `path`) are refused
 /// when they carry one: see [`writes_outside`].
-const ALLOWED: [&str; 77] = [
+const ALLOWED: [&str; 78] = [
     "app_info",
     "track_set_role",
     "track_set_mix",
