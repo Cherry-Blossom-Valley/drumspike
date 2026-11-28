@@ -293,7 +293,9 @@ function lnRowGaps() {   // the audio files of a DAW track that do not follow th
       for (const from of e.srcs) {
         if (from === to || (S.tracks[to] && S.tracks[to].follows)) continue;
         const ids = (((S.tracks[from] || {}).learn || {}).marks || []).filter(m => !row.some(x => x.from === from && x.id === m.id && x.kind === m.kind)).map(m => m.id);
-        if (ids.length) gaps.push({ to, from, ids });
+        const marks = ((S.tracks[from] || {}).learn || {}).marks || [];
+        const stale = row.some(x => x.from === from && !marks.some(m => m.id === x.id && m.kind === x.kind));   // a copy whose mark the origin has not any more: Apply takes it back
+        if (ids.length || stale) gaps.push({ to, from, ids });
       }
     }
   }
@@ -362,16 +364,17 @@ function learnMark(kind) {   // Hits > Learn This (K), Forget This (Shift+K)
     // (track_learn_set with the learn before re-picks again)
     const before = lnApply(r.track, r.learn, r);
     const peers = lnPeers(r.track), markId = r.mark && r.mark.id, label = kind === "this" ? "Learn This" : "Forget This", at = a.hit !== undefined ? a.hit : a.t0;
-    let answers = [r];
+    let answers = [r], peerErr = "", cur = null;
     if (peers.length && markId) {   // #587: the other audio files of the DAW track take the mark, all in one undo step
       const steps = [lnStep(r, before, label, at)];
       try {
         for (const p of peers) {
+          cur = p;
           const rr = await B.learnAdopt(S.sid, p, r.track, [markId]);
           const b = lnApply(rr.track, rr.learn, rr);
           steps.push(lnStep(rr, b, label, at)); answers.push(rr);
         }
-      } catch (e) { setMsg(`${label}: ${errText(e)}; the audio files before it keep the mark`, "error"); }
+      } catch (e) { peerErr = `${lnFileText(cur)}: not applied: ${errText(e)}`; }
       pushGroup(label, steps);
       lnGuardAll(answers);
     } else { lnPush(r, before, label, at); lnGuard(r); }
@@ -380,13 +383,14 @@ function learnMark(kind) {   // Hits > Learn This (K), Forget This (Shift+K)
     const matchHint = kind === "not" && r.learn && r.learn.on && !lnHint(r.learn) ?   // P4-37b: how strict the current Match is (not next to the "Forget This alone" hint)
       `. The current Match takes ${lnOutCounts(r.track).learnOut} similar ${lnOutCounts(r.track).learnOut === 1 ? "hit" : "hits"} out - drag the Match line in the histogram for more or fewer` : "";
     const pre = routed ? `learned on ${r.track} (${name} follows it): ` : `${name}: `;
-    const rowTail = answers.length > 1 ? `. ${lnRowText(answers)}` : "";
+    const rowTail = (answers.length > 1 ? `. ${lnRowText(answers)}` : "") + (peerErr ? `. ${peerErr}` : "");   // #587: a refused file stays in the message
+    const lvl = peerErr ? "error" : undefined;
     if (r.added_hit != null && r.learn) {   // P4-38b: K on a missed hit added it: the status says what the Add rule does from here (P4-38d: with the filter off too, which a K-add never turns on)
       const tail = `. Learn adds ${lnAddCount(r.track, lnAddOf(r.track))} similar hits (Add ${lnAddOf(r.track).toFixed(2)}) - drag the Add line for more or fewer`;
-      setMsg(`${pre}added 1 hit at ${r.added_hit.toFixed(3)} s and learned it (${w.c.this} learn, ${w.c.not} forget)${r.filter_error ? ` (the filter applies on the next Re-analyze: ${r.filter_error})` : ""}${tail}${rowTail}`);
+      setMsg(`${pre}added 1 hit at ${r.added_hit.toFixed(3)} s and learned it (${w.c.this} learn, ${w.c.not} forget)${r.filter_error ? ` (the filter applies on the next Re-analyze: ${r.filter_error})` : ""}${tail}${rowTail}`, lvl);
       return;
     }
-    setMsg(`${pre}${kind === "this" ? "learned" : "Forget This on"} ${w.n} ${w.n === 1 ? "hit" : "hits"}${r.flipped ? `, ${r.flipped} changed kind` : ""} (${w.c.this} learn, ${w.c.not} forget)${r.filter_on ? ", Learn filter on" : ""}${lnResult(r)}${off && kind === "this" ? `. ${LN_HINT_OFF}` : ""}${matchHint}${rowTail}`);
+    setMsg(`${pre}${kind === "this" ? "learned" : "Forget This on"} ${w.n} ${w.n === 1 ? "hit" : "hits"}${r.flipped ? `, ${r.flipped} changed kind` : ""} (${w.c.this} learn, ${w.c.not} forget)${r.filter_on ? ", Learn filter on" : ""}${lnResult(r)}${off && kind === "this" ? `. ${LN_HINT_OFF}` : ""}${matchHint}${rowTail}`, lvl);
   });
 }
 function lnTrackFor() { return S.selTrack || (LN.sel && LN.sel.track) || (LN.mark && LN.mark.track) || (S.sel && S.sel.track) || null; }

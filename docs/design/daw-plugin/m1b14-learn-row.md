@@ -273,3 +273,28 @@ nudge stops at the clip edge (R5), the guard is reused per file (R6).
   `HT.srcsOf` gives `[name]` outside a DAW), `rangeNudge` (`HT.clampTo` returns its argument outside a DAW), `updateStatus` (one call that
   removes nothing when no note exists), `lnInspector` (the copies count is 0). Twin tests prove each; no expected value of an existing
   test changed.
+
+## 12. Fix round 1 (review of head a838533)
+
+- **Save and reopen.** `migrate_learn` (it runs on every open) switched the filter off for a file with no own "not" example. A file that holds
+  only copies lost its rule. Every count that decides the cap or "first Forget turns the filter on" now takes own examples plus `learn.row`
+  (`total_counts`): `migrate_learn`, `apply_mark`, `flip_mark` and the first-"not" rule of `track_learn_mark`, as `adopt` and `check_learn` did.
+  A filter that the user switched off stays off at the next own Forget This when copies exist. Tests: reopen, cap, off.
+- **Where the copied vectors come from.** `adopt` always recomputes the feature vector at the example time on the audio of the origin
+  (`candidate_features(samples, sr, at)`). It does not take the vector of the cached candidate frame. The origin's own score uses the cached
+  frame when an example lies within 30 ms of a candidate, so the copy of an example can differ slightly from the origin's own vector. The
+  arithmetic of both paths is unchanged.
+- **`adopt` with nothing to copy.** A `from` that holds no mark (or none that `name` lacks) is not an error: the answer is `adopted: 0`
+  and nothing changes.
+- **Remove Example on the origin (point F5).** A copy whose origin mark is gone (removed, or changed kind or examples) makes the status-line hint
+  show; "Apply" calls `adopt`, which also removes the copies of that origin that the origin does not hold any more. One undo step as before.
+- **A refused file.** A failed copy to one audio file stays in the final status message ("audio file 2 of 2 of Drums: not applied: reason"), in
+  the error style. The files before it keep the mark and the group undo covers them.
+- **Guard.** It asks after the action, as on one file today. One undo restores every file, and the counts per audio file are in the status line.
+- **Size of `learn.row` (measured, 63 copied examples on one file, recipe patch-2).** The `learn` JSON is 141 173 bytes with the copies and 70
+  bytes without. One Learn answer (adopt, with the hits) is 147 713 bytes with and 6 586 without. The project file is 277 364 bytes with and
+  25 856 without. One answer grows by about 141 KB at the cap of 64.
+- **Standalone byte proof.** `tools/identity.py` snapshot of the `golden` part (60 items: analysis, events, MIDI of 20 synthetic WAVs) on 2d76b47
+  and on the head: 0 items differ. The `enst` and `sessions` parts need internal data and were not run.
+- **Limits, one line each.** Re-analyze Selection reads the own example times only, not the copies. A copy made with another method (recipe length)
+  than the receiving file's current one is left out of the score.

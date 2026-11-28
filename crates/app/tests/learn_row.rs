@@ -42,6 +42,7 @@ fn grid(n: usize, step: f64) -> (Vec<f64>, Vec<f64>) {
 }
 
 struct Row {
+    dir: std::path::PathBuf,
     svc: Service,
     sid: String,
     kicks: Vec<f64>,
@@ -90,6 +91,7 @@ fn row(tag: &str, n: usize, step: f64, sr_a: u32, sr_b: u32, b_only: Option<bool
     svc.analyze_start(&sid, None, None, None).unwrap();
     wait_done(&svc, &sid);
     Row {
+        dir,
         svc,
         sid,
         kicks,
@@ -328,9 +330,9 @@ fn a_refused_adopt_changes_nothing() {
     assert_eq!(lb, Value::Null);
 }
 
-/// #587: a copy that exists is skipped; the copies are in the document; Forget Examples takes them; the document keeps them.
+/// #587: a copy that exists is skipped; the copies are a valid learn object (the page's undo stores it); Forget Examples takes them.
 #[test]
-fn adopt_is_repeatable_and_the_copies_survive_a_save_and_go_with_forget() {
+fn adopt_is_repeatable_the_copies_are_a_valid_learn_object_and_go_with_forget() {
     let r = row("lr_repeat", 30, 0.3, 48_000, 48_000, None);
     make_rule(&r, "a");
     let first = r.svc.track_learn_adopt(&r.sid, "b", "a", None).unwrap();
@@ -437,4 +439,135 @@ fn a_hit_marked_again_on_the_other_file_replaces_its_copy() {
     let row_b = learn_of(&r, "b")["row"].as_array().unwrap().clone();
     assert_eq!(row_b.len(), 1, "{row_b:?}");
     assert_eq!(row_b[0]["kind"], "this");
+}
+
+/// #587 review F1: the copies survive a save and a reopen. `project_open_with` runs `migrate_learn`, which switched the
+/// filter off for a file whose own "not" examples are none: a file that only holds copies lost its rule silently.
+#[test]
+fn the_rule_of_a_file_that_only_holds_copies_survives_save_and_reopen() {
+    let r = row("lr_reopen", 40, 0.3, 48_000, 48_000, None);
+    make_rule(&r, "a");
+    r.svc.track_learn_adopt(&r.sid, "b", "a", None).unwrap();
+    let (learn, ev) = (learn_of(&r, "b"), events(&r, "b"));
+    assert_eq!(learn["on"], true);
+    assert_eq!(out_of(&r, "b", &r.clicks), 40);
+    r.svc.project_save(&r.sid).unwrap();
+    r.svc.project_close(&r.sid, true).unwrap();
+    let sid = r.svc.project_open_with(&r.dir.display().to_string(), false).unwrap()["sid"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let after = r.svc.tracks_get(&sid).unwrap()["tracks"]["b"]["learn"].clone();
+    assert_eq!(after, learn, "the learn object of file b is as it was saved");
+    assert_eq!(
+        r.svc.events_get(&sid, "b").unwrap()["events"]
+            .as_array()
+            .unwrap()
+            .clone(),
+        ev,
+        "and so are its hits"
+    );
+}
+
+/// #587 review F2: the cap counts own examples plus copies on every path (mark, flip, adopt, check).
+#[test]
+fn an_own_mark_counts_the_copies_against_the_cap() {
+    let r = row("lr_cap", 20, 0.3, 48_000, 48_000, None);
+    let dim = drumspike_core::similarity::Recipe::Patch.len();
+    let at: Vec<f64> = (0..40).map(|i| 100.0 + f64::from(i)).collect();
+    let learn = json!({"on": false, "threshold": 0.5, "auto": true, "method": "patch-2",
+        "marks": [{"id": "m1", "kind": "this", "t0": 100.0, "t1": 140.0, "at": at}],
+        "row": [{"id": "m1", "from": "a", "kind": "this", "fps": vec![vec![0.1; dim]; 24], "atk": vec![0.0; 24]}]});
+    r.svc.track_learn_set(&r.sid, "b", &learn).unwrap();
+    assert_eq!(
+        learn_of(&r, "b")["row"].as_array().unwrap().len(),
+        1,
+        "40 own + 24 copied = 64 is stored"
+    );
+    let t = first_of(&r, "b", &r.kicks);
+    let e = r.svc.track_learn_mark(&r.sid, "b", "this", None, Some(t)).unwrap_err();
+    assert!(e.message.contains("at most 64 this examples"), "{e:?}");
+    assert_eq!(learn_of(&r, "b"), learn, "a refused mark changes nothing");
+    // the other kind has room
+    assert!(r.svc.track_learn_mark(&r.sid, "b", "not", None, Some(t)).is_ok());
+}
+
+/// #587 review F4: a copied "not" example counts as an earlier "not": the filter that the user switched off stays off at the
+/// first own Forget This.
+#[test]
+fn an_own_forget_does_not_switch_a_filter_on_that_the_user_switched_off_when_copies_exist() {
+    let r = row("lr_off", 20, 0.3, 48_000, 48_000, None);
+    make_rule(&r, "a");
+    r.svc.track_learn_adopt(&r.sid, "b", "a", None).unwrap();
+    let mut l = learn_of(&r, "b");
+    l["on"] = json!(false);
+    r.svc.track_learn_set(&r.sid, "b", &l).unwrap();
+    let t = first_of(&r, "b", &r.clicks);
+    let m = r.svc.track_learn_mark(&r.sid, "b", "not", None, Some(t)).unwrap();
+    assert_eq!(m["filter_on"], false, "{m}");
+    assert_eq!(learn_of(&r, "b")["on"], false);
+}
+
+/// #587 review F5: a copy of a mark that the origin file removed goes at the next adopt (the page's Apply), also when there is
+/// nothing new to copy.
+#[test]
+fn adopt_takes_back_the_copy_of_a_mark_that_the_origin_removed() {
+    let r = row("lr_stale", 20, 0.3, 48_000, 48_000, None);
+    make_rule(&r, "a");
+    r.svc.track_learn_adopt(&r.sid, "b", "a", None).unwrap();
+    assert_eq!(learn_of(&r, "b")["row"].as_array().unwrap().len(), 2);
+    r.svc.track_learn_remove(&r.sid, "a", "m2", None).unwrap();
+    assert_eq!(
+        learn_of(&r, "b")["row"].as_array().unwrap().len(),
+        2,
+        "removing the origin's mark touches b not yet"
+    );
+    let ad = r.svc.track_learn_adopt(&r.sid, "b", "a", None).unwrap();
+    assert_eq!(ad["adopted"], 0);
+    let row_b = learn_of(&r, "b")["row"].as_array().unwrap().clone();
+    assert_eq!(row_b.len(), 1, "{row_b:?}");
+    assert_eq!(row_b[0]["id"], "m1");
+}
+
+/// #587 review M1: the bytes of 64 copied examples (run by hand: `cargo test -p drumspike-app --test learn_row -- --ignored --nocapture size`).
+#[test]
+#[ignore = "a measurement"]
+fn size_of_the_copies() {
+    let r = row("lr_size", 80, 0.3, 48_000, 48_000, None);
+    let last = r.kicks[31] + 0.1;
+    let m = r
+        .svc
+        .track_learn_mark(&r.sid, "a", "this", Some((0.0, last)), None)
+        .unwrap();
+    eprintln!(
+        "#587 size: marked {} examples on a",
+        m["mark"]["at"].as_array().unwrap().len()
+    );
+    let ad = r.svc.track_learn_adopt(&r.sid, "b", "a", None).unwrap();
+    let with = learn_of(&r, "b");
+    let n: usize = with["row"][0]["fps"].as_array().unwrap().len();
+    let mut without = with.clone();
+    without.as_object_mut().unwrap().remove("row");
+    let ans_with = ad.to_string().len();
+    let set = r.svc.track_learn_set(&r.sid, "b", &without).unwrap();
+    let ans_without = set.to_string().len();
+    r.svc.track_learn_set(&r.sid, "b", &with).unwrap();
+    r.svc.project_save(&r.sid).unwrap();
+    let file = |d: &std::path::Path| {
+        std::fs::read_dir(d)
+            .unwrap()
+            .filter_map(Result::ok)
+            .find(|e| e.path().extension().is_some_and(|x| x == "drumspike"))
+            .map(|e| std::fs::metadata(e.path()).unwrap().len())
+            .unwrap()
+    };
+    let f_with = file(&r.dir);
+    r.svc.track_learn_set(&r.sid, "b", &without).unwrap();
+    r.svc.project_save(&r.sid).unwrap();
+    let f_without = file(&r.dir);
+    eprintln!(
+        "#587 size: {n} copied examples; learn JSON {} bytes with, {} without; one Learn answer {ans_with} with, {ans_without} without; project file {f_with} with, {f_without} without",
+        with.to_string().len(),
+        without.to_string().len()
+    );
 }

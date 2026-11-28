@@ -127,6 +127,14 @@ pub fn filter_on(learn: &Map<String, Value>) -> bool {
     learn.get("on").and_then(Value::as_bool) == Some(true) && this + not + rthis + rnot > 0
 }
 
+/// #587: own examples plus copies of other files' examples, per kind: `(this, not)`. The one count of the cap and of the
+/// first-"not" rules.
+pub fn total_counts(learn: &Map<String, Value>) -> (usize, usize) {
+    let (a, b) = counts(learn);
+    let (c, d) = row_counts(learn);
+    (a + c, b + d)
+}
+
 /// #587: the number of examples of each kind that other audio files of the same DAW track made (`learn.row`): `(this, not)`.
 /// `(0, 0)` for a project no DAW track made.
 pub fn row_counts(learn: &Map<String, Value>) -> (usize, usize) {
@@ -228,7 +236,7 @@ pub fn apply_mark(
             None => fresh.push(a),
         }
     }
-    let (n_this, n_not) = counts(learn);
+    let (n_this, n_not) = total_counts(learn); // #587: the copies of other files' examples count against the cap too
     let have = if kind == "this" { n_this } else { n_not };
     if have + fresh.len() + flips.len() > MAX_EXAMPLES {
         return Err(AppError::bad(format!(
@@ -343,7 +351,7 @@ pub fn forget_at(learn: &mut Map<String, Value>, t0: f64, t1: f64, hit: bool) ->
 /// A 400 `AppError` when no mark has the id `id`, or when the other kind would then hold more than
 /// [`MAX_EXAMPLES`] examples.
 pub fn flip_mark(learn: &mut Map<String, Value>, id: &str) -> Result<&'static str, AppError> {
-    let (n_this, n_not) = counts(learn);
+    let (n_this, n_not) = total_counts(learn);
     let mut marks: Vec<Value> = marks_of(learn).to_vec();
     let m = marks
         .iter_mut()
@@ -702,7 +710,8 @@ pub fn migrate_learn(extra: &mut Map<String, Value>) -> bool {
     let Some(Value::Object(learn)) = extra.get_mut("learn") else {
         return false;
     };
-    if learn.get("on") != Some(&Value::Bool(true)) || counts(learn).1 > 0 {
+    if learn.get("on") != Some(&Value::Bool(true)) || total_counts(learn).1 > 0 {
+        // #587: copied "not" examples count
         return false;
     }
     learn.insert("on".into(), json!(false));
@@ -975,7 +984,7 @@ impl Service {
             added_hit = Some(t);
         }
         let ((r, turned_on), learn) = self.learn_edit(sid, &target, |l| {
-            let not_before = counts(l).1;
+            let not_before = total_counts(l).1; // #587: a copied "not" example counts, so a filter the user switched off stays off
             let r = apply_mark(l, kind, t0, t1, &resolved.at)?;
             if kind == "this" {
                 // P4-38e: K on the spot of a deleted Learn hit brings it back (the refilter forces it again)
@@ -1324,12 +1333,11 @@ impl Service {
     /// audio the existing score reads, not what counts as similar. `ids`: the ids of the marks of `from` to copy, else
     /// every mark of `from` that `name` holds no copy of yet. A copy that exists is skipped (the call is repeatable).
     /// A first "not" example turns the filter of `name` on as `track_learn_mark` does. Then the hits of `name` are
-    /// marked again. Answers as `track_learn_mark` does, with `adopted` (the number of copies) and `from`.
+    /// marked again. Answers as `track_learn_mark` does, with `adopted` (the number of copies) and `from`. A `from` that holds no mark (or none that `name` lacks) answers `adopted: 0` and changes nothing.
     ///
     /// # Errors
     ///
-    /// A 400 `AppError` when `name` and `from` are the same track, an id is not a mark of `from`, `from` holds no
-    /// mark to copy, or a kind would hold more than [`MAX_EXAMPLES`] examples (nothing changes then); a 404 for an
+    /// A 400 `AppError` when `name` and `from` are the same track, an id is not a mark of `from`, or a kind would hold more than [`MAX_EXAMPLES`] examples (nothing changes then); a 404 for an
     /// unknown project or track; a 409 for an offline track or a follower whose source is gone, or a read-only project.
     pub fn track_learn_adopt(
         &self,
@@ -1409,11 +1417,27 @@ impl Service {
         }
         let adopted: usize = entries.iter().map(|e| e["fps"].as_array().map_or(0, Vec::len)).sum();
         let ((), learn) = self.learn_edit(sid, &target, |l| {
-            if entries.is_empty() {
-                return Ok(());
-            }
             let not_before = counts(l).1 + row_counts(l).1;
             let mut row: Vec<Value> = l.get("row").and_then(Value::as_array).cloned().unwrap_or_default();
+            // a copy of a mark that the origin has not any more (removed, or changed kind or examples) goes: the rule follows its origin
+            let n0 = row.len();
+            row.retain(|e| {
+                e["from"] != origin.as_str()
+                    || e.get("at").is_none()
+                    || marks_of(&theirs)
+                        .iter()
+                        .any(|m| m["id"] == e["id"] && m["kind"] == e["kind"] && ats_of(m) == ats_of(e))
+            });
+            if entries.is_empty() {
+                if row.len() != n0 {
+                    if row.is_empty() {
+                        l.shift_remove("row");
+                    } else {
+                        l.insert("row".into(), Value::Array(row));
+                    }
+                }
+                return Ok(());
+            }
             // the last mark wins, as on one file: an older copy of an example that the new copies mark again leaves its entry
             let fresh: Vec<f64> = entries.iter().flat_map(ats_of).collect();
             for e in &mut row {

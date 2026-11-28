@@ -308,3 +308,40 @@ def test_the_standalone_range_nudge_is_not_clamped(plain):
     plain.wait_for_function("() => !S.events['Kick In'].some(e => Math.abs(e.t - 2.5) < 0.03)")
     moved = plain.evaluate("() => S.events['Kick In'].filter(e => e.t > 2.9).map(e => e.t)")
     assert any(abs(t - 3.1) < 0.02 for t in moved), moved
+
+
+# ---------------------------------------------------------------- review round 1
+
+def test_a_refused_file_stays_in_the_message_of_the_action(host):
+    sid = sid_of(host)
+    host.route("**/invoke/track_learn_adopt", lambda route: route.fulfill(status=400, content_type="application/json", body='{"code":400,"message":"planted refusal"}'))
+    mark(host, A, 1.0, "Shift+K")
+    host.unroute("**/invoke/track_learn_adopt")
+    assert near(grey(host, A), 1.0) and not grey(host, B)
+    assert not (learn_of(host, sid, B) or {}).get("row")
+    text = host.locator("#stMsg").inner_text()
+    assert "audio file 2 of 2 of Drums: not applied" in text and "planted refusal" in text, text
+    assert host.evaluate("() => _msgLevel") == "error", "the error style"
+
+
+def test_the_standalone_message_of_a_mark_is_the_old_one(plain):
+    mark(plain, A, 1.0, "Shift+K")
+    text = plain.locator("#stMsg").inner_text()
+    assert "not applied" not in text and "audio file" not in text, text
+    assert text.startswith(f"{A}: Forget This on 1 hit"), text
+
+
+def test_after_remove_example_on_the_origin_a_hint_shows_and_apply_takes_the_copy_back(host):
+    sid = sid_of(host)
+    mark(host, A, 1.0, "Shift+K")
+    assert near(grey(host, B), 1.0) and host.evaluate("() => document.getElementById('hostLearnNote')") is None
+    mid = learn_of(host, sid, A)["marks"][0]["id"]
+    host.evaluate("([n, id]) => learnRemove(n, id)", [A, mid])
+    idle(host)
+    host.wait_for_function("() => document.getElementById('hostLearnNote')")
+    assert "does not follow its Learn marks yet" in host.locator("#hostLearnNote").inner_text()
+    host.locator("#hostLearnNote a.hostLearnApply").click()
+    idle(host)
+    host.wait_for_function("() => !document.getElementById('hostLearnNote')")
+    assert not (learn_of(host, sid, B) or {}).get("row"), "the copy of the removed mark is gone"
+    assert not grey(host, B), "and file b is no longer filtered by it"
