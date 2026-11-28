@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Drum Spike Deliver</title>
+  <style>
+    :root { color-scheme: dark; --accent: #F7C449; --bg: #151515; --panel: #1f1f1f; --line: #333; --text: #ddd; --dim: #8a8a8a; --bad: #ff8a80; --good: #9be28a; }
+    body { margin: 0; background: var(--bg); color: var(--text); font: 14px -apple-system, Helvetica, sans-serif; }
+    main { padding: 16px; max-width: 760px; margin: 0 auto; }
+    h1 { font-size: 18px; margin: 0 0 4px; }
+    p.lead { margin: 0 0 14px; color: var(--dim); }
+    #status { color: var(--dim); font-size: 12px; margin-bottom: 12px; }
+    #drop { border: 1px dashed #555; border-radius: 8px; padding: 18px; text-align: center; background: var(--panel); }
+    #drop.hot { border-color: var(--accent); }
+    #drop label { cursor: pointer; text-decoration: underline; }
+    section { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; margin-top: 12px; }
+    section h2 { font-size: 13px; margin: 0 0 6px; color: var(--dim); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+    ul { margin: 4px 0 0; padding-left: 18px; }
+    .bad { color: var(--bad); }
+    .good { color: var(--good); }
+    button { font: inherit; background: #2a2a2a; color: var(--text); border: 1px solid #555; border-radius: 6px; padding: 8px 16px; cursor: pointer; }
+    button.primary { background: var(--accent); color: #000; border-color: var(--accent); font-weight: 600; }
+    button:disabled { opacity: .4; cursor: default; }
+    .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+    pre { margin: 6px 0 0; white-space: pre-wrap; font: 12px Menlo, monospace; }
+  </style>
+</head>
+<body>
+<main>
+  <h1>Drum Spike Deliver</h1>
+  <p class="lead">Proof. Puts the hits and the spike files of the Drum Spike plugin on new tracks, at their song positions, in one undo step. It adds tracks and clips only; it changes nothing that exists.</p>
+  <div id="status">connecting...</div>
+
+  <div id="drop">
+    <div>Drop the list file <code>drumspike-deliver.json</code> and the <code>.wav</code> files here, or
+      <label>choose them<input id="pick" type="file" multiple accept=".json,.wav" hidden></label>.</div>
+  </div>
+
+  <section id="plan" hidden>
+    <h2>What a press will do</h2>
+    <div id="plan-text"></div>
+    <ul id="plan-names"></ul>
+    <div id="plan-problems" class="bad"></div>
+  </section>
+
+  <section>
+    <div class="row">
+      <button id="deliver" class="primary" disabled>Deliver to tracks</button>
+      <button id="measure" disabled title="Reads the created tracks and prints how far they are from the list. Changes nothing.">Measure (read only)</button>
+    </div>
+  </section>
+
+  <section id="result-box" hidden>
+    <h2>What it did</h2>
+    <div id="result"></div>
+  </section>
+</main>
+<script src="vendor/luna.global.js"></script>
+<script src="logic.js"></script>
+<script src="main.js"></script>
+</body>
+</html>
