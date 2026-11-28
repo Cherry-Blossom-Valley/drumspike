@@ -75,7 +75,7 @@ that look at one event at two times.
   then the report. The host waits for the round of the late files by a job row that lists every source of the document
   (the first round has fewer tracks, so a first-round row that is written late cannot satisfy it); the wait is bounded at
   20 s and fails with a text that starts with "time limit".
-- Proof that the stage can see the defect: the host option `--trigger-blind-ms 1500` makes the trigger blind for 1.5 s while
+- Proof that the stage can see the defect: the host option `--trigger-blind-ms 1500` (it is `--trigger-blind` since #605, see `f6c-late-repair.md`) makes the trigger blind for 1.5 s while
   the end can see the report (the order of events that a loaded machine gives now and then, made certain). With the fix the
   stage passes in this order (`editor-refuse-late-trigger`). The fault run `editor-refuse-fault-late` adds `--end-on-report`
   (the old end): it must fail on the later round alone, with all 14 commands answered 403. The fault run

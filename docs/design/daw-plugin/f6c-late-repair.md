@@ -43,6 +43,8 @@ The removal of a track (`Msg::Remove`) is no trigger of its own: a removal ends 
 - Fault run: `DS_ARA_RESTORE_FAULT=no-late-try` (no late try at all). The unit test fails with "no late try after the
   trigger".
 
+Known cost: `Repair::Wait` in `late_repair` keeps the try owed with no limit, so a track that never comes costs one `tracks_get` per round.
+
 ### Limit that stays
 
 A page job with no work of the plugin behind it (the user starts a job in the editor and nothing in the DAW changes)

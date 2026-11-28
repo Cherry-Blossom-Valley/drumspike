@@ -8179,13 +8179,13 @@ mod tests {
         };
         let calls = || service::busy_test::CALLS.with(|c| c.get());
         service::busy_test::reset(u32::MAX);
-        // the busy tries up to the limit: no late try is owed before the limit is reached
-        for _ in 0..REPAIR_BUSY_TRIES {
-            session().repair_and_retry(&src);
-        }
-        assert!(!src.repair_late.load(Ordering::SeqCst), "not owed before the limit");
+        // nothing is owed before the give-up: a trigger costs no call
         session().late_repair(&doc);
-        assert_eq!(calls(), REPAIR_BUSY_TRIES, "a trigger before the limit costs no call");
+        assert_eq!(calls(), 0, "a trigger before the give-up costs no call");
+        // the count stands at the limit (as after 100 busy tries), so this ONE call gives up. No loop over
+        // `repair_and_retry`: every `RepairPlan::Again` would start a `defer_msg` thread that sends `Msg::Ready` to the
+        // live worker of the process, where the thread-local busy seam does not apply. This call sends none.
+        src.repair_busy.store(REPAIR_BUSY_TRIES, Ordering::SeqCst);
         session().repair_and_retry(&src); // the try that reaches the limit: ONE row
         assert_eq!(rows("\"gave up\""), 1);
         assert!(src.repair_late.load(Ordering::SeqCst), "the give-up owes one late try");
@@ -8195,6 +8195,7 @@ mod tests {
         let before = calls();
         // trigger 1: ONE try, busy again: at most one more row, still owed
         session().late_repair(&doc);
+        assert!(calls() > before, "no late try after the trigger");
         assert_eq!(calls(), before + 1, "one try per trigger, no sleep");
         assert_eq!(service::busy_test::SLEEPS.with(|c| c.get()), 0);
         assert_eq!(rows("\"gave up\""), 2, "the late try wrote the one more row");
