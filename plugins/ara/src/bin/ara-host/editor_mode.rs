@@ -24,6 +24,10 @@
 //! `edit-round` and `refuse` after the page's report, in `analyse-race` when the page's own
 //! analysis has started. `--wait-sync` (mode `edit`): after the edit the host waits for the row
 //! `page_sync` of the plugin's worker (without the scenario `sync-delay`).
+//! `--trigger-blind-ms <n>` (#583): for the first n ms of the wait the trigger of the late files does not see the page's
+//! report, but the end of the run does. That is the order of events that a loaded machine gives now and then (the report lands
+//! after the trigger was looked at and before the end of the same loop turn), made certain. `--end-on-report` (a fault of the
+//! check): the mode `refuse` ends at the report, as it did before #583.
 //! ```
 //! Keys and clicks are real `NSEvent`s through `[NSApp sendEvent:]` (the S2 finding: the
 //! window server path needs the accessibility trust).
@@ -552,6 +556,11 @@ fn rows() -> Vec<serde_json::Value> {
         .unwrap_or_default()
 }
 
+/// The rows of one event that a test accepts (#583: a job row that lists enough tracks).
+fn count_rows_where(event: &str, pred: impl Fn(&serde_json::Value) -> bool) -> usize {
+    rows().iter().filter(|r| r["event"] == event && pred(r)).count()
+}
+
 fn count_rows(event: &str, kind: Option<&str>) -> usize {
     rows()
         .iter()
@@ -638,6 +647,10 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
     let no_ara = arg_flag(rest, "--no-ara");
     let late_files = args_list(rest, "--late-files");
     let wait_sync = arg_flag(rest, "--wait-sync");
+    let blind_ms: u64 = args_value(rest, "--trigger-blind-ms")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
+    let end_on_report = arg_flag(rest, "--end-on-report");
     let store_at_edit = args_value(rest, "--store-at-edit");
     // M1b10 (mode `names`): after the page's first report the host renames region sequences
     // (`--rename-seq <j>=<name>`) and moves regions to other sequences (`--move-region <i>=<j>`)
@@ -1348,7 +1361,10 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                     let trigger = match mode.as_str() {
                         "open-first" | "firstopen" => count_rows("page_report", Some("boot")) > boots_before,
                         "edit-round" => count_rows("page_report", Some("edit")) > edits_before,
-                        "refuse" => count_rows("page_report", Some("refuse")) > refuse_before,
+                        "refuse" => {
+                            count_rows("page_report", Some("refuse")) > refuse_before
+                                && t0.elapsed() >= Duration::from_millis(blind_ms)
+                        }
                         "analyse-race" => count_rows("page_report", Some("analyse-started")) > started_before,
                         _ => false,
                     };
@@ -1370,15 +1386,29 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                         }
                         // the source is complete a moment before the plugin writes the row of its
                         // round: wait for the row, so the report is whole when the run ends
+                        // #583 (mode `refuse`): the row must be the round of the late files: a job row that lists every
+                        // source of the document (an earlier round has fewer tracks, so a row of the first round
+                        // that is written late cannot satisfy the wait)
+                        // (false before the action: no row can list more tracks than the document had sources)
+                        let (want_tracks, seen) = if mode == "refuse" {
+                            (doc.pairs.len(), 0)
+                        } else {
+                            (0, jobs_before)
+                        };
+                        let late_row = |n: usize| {
+                            count_rows_where("job", |r| {
+                                r["project_tracks"].as_array().is_some_and(|t| t.len() >= want_tracks)
+                            }) > n
+                        };
                         let t = Instant::now();
-                        while mode != "firstopen"
-                            && t.elapsed() < Duration::from_secs(20)
-                            && count_rows("job", None) <= jobs_before
-                        {
+                        while mode != "firstopen" && t.elapsed() < Duration::from_secs(20) && !late_row(seen) {
                             pump(&app);
                         }
-                        if mode != "firstopen" && count_rows("job", None) <= jobs_before {
-                            failed = Some("the plugin wrote no row for the round of the late files in 20 s".into());
+                        if mode != "firstopen" && !late_row(seen) {
+                            failed = Some(format!(
+                                "time limit: the plugin wrote no row for the round of the late files within 20 s ({} sources in the document)",
+                                doc.pairs.len()
+                            ));
                             break;
                         }
                     }
@@ -1431,6 +1461,13 @@ pub fn run(bundle: &str, files: &[String], rest: &[String]) -> i32 {
                     Some("analyse") if destroy_late.is_some() => {
                         count_rows("page_report", Some("analyse")) > reports_before
                             && destroyed_jobs.is_some_and(|j| count_rows("job", None) > j)
+                    }
+                    // #583: the mode `refuse` adds its late files when the refuse report is there; the same report
+                    // must not end the run before that happened (the report can land in the pump above, after the
+                    // trigger was looked at: the run then ended with no later round). The wait is false until the
+                    // late files are added (`late_done`), and bounded by `limit`.
+                    Some("refuse") if !late_files.is_empty() && !end_on_report => {
+                        late_done && count_rows("page_report", Some("refuse")) > refuse_before
                     }
                     Some(k) => count_rows("page_report", Some(k)) > reports_before,
                     // the ready mode waits for the page's boot report too (the driver sends it

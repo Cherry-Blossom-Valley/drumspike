@@ -51,7 +51,10 @@
 //! new audio fail); `--add-late <wav>`: a source is added at the end and the host waits for all; `grow ... --linger-ms <n>`: the host keeps
 //! pumping for n ms at the end;
 //! `restore ... --enable-access`: after the restore the host enables the samples access of
-//! every source (no request) and waits 3 s.
+//! every source (no request) and waits 3 s. `--fail-reads <k>:<n>` (#586): the first n reads of source k fail;
+//! `--reread <k>`: after 1.5 s the host turns the samples access of source k off and on again (a good read follows).
+//! `restore-readd --files ... --archive <file> --readd <k>` (#586): after the restore the host destroys source k
+//! before any audio was read and adds the same file again in the same document; the access of the others is turned on.
 //!
 //! A file `synth:<secs>` is a source the host makes itself (a kick-like figure, 48 kHz mono):
 //! long sources for the modes that need an analysis that takes seconds.
@@ -1971,6 +1974,12 @@ fn main() {
             *SLOW_READ.lock().unwrap() = Some((k, ms));
         }
     }
+    if let Some((k, n)) = args_value(&rest, "--fail-reads").and_then(|v| {
+        v.split_once(':')
+            .and_then(|(k, n)| Some((k.parse().ok()?, n.parse().ok()?)))
+    }) {
+        *FAIL_READS.lock().unwrap() = Some((k, n));
+    }
     if let Some(r) = args_value(&rest, "--regions-all").and_then(|v| parse_region(&v).ok()) {
         *REGIONS_ALL.lock().unwrap() = Some(r);
         *REGIONS_STEP.lock().unwrap() = args_value(&rest, "--regions-step")
@@ -1993,7 +2002,9 @@ fn main() {
             &files,
             args_value(&rest, "--archive"),
             rest.iter().any(|a| a == "--enable-access"),
+            args_value(&rest, "--reread").and_then(|v| v.parse().ok()),
         ),
+        "restore-readd" => run_restore_readd(bundle, &files, &rest),
         "blocks" => run_blocks(bundle, &files, &rest),
         "tables" => run_tables(bundle),
         "version" => run_version(bundle),
@@ -2613,6 +2624,61 @@ fn run_restore2(bundle: &str, files: &[String], rest: &[String]) -> i32 {
     }
 }
 
+/// `restore-readd` (#586): the archive is restored; before any audio is read the host destroys source `--readd <k>` and
+/// adds the same file again in the same document (a track that goes and comes back). The samples access of the other
+/// sources is turned on; the host waits for the analysis of the new source and 3 s more.
+fn run_restore_readd(bundle: &str, files: &[String], rest: &[String]) -> i32 {
+    let (Some(archive), Some(k)) = (
+        args_value(rest, "--archive").and_then(|a| std::fs::read(a).ok()),
+        args_value(rest, "--readd").and_then(|v| v.parse::<usize>().ok()),
+    ) else {
+        eprintln!("restore-readd: want --archive <readable> --readd <k>");
+        return 64;
+    };
+    let result = (|| -> Result<(), String> {
+        unsafe {
+            let loaded = load(bundle)?;
+            let mut d = HostDoc::with_archive(&loaded, archive)?;
+            let (pairs, _base) = d.add_only(files, "restore")?;
+            d.restore()?;
+            d.pairs.extend(pairs);
+            let file = files
+                .get(k)
+                .ok_or_else(|| format!("--readd {k}: no such file"))?
+                .clone();
+            d.destroy_source(k)?;
+            d.add_and_analyse(std::slice::from_ref(&file), "readd")?;
+            let others: Vec<_> = d
+                .pairs
+                .iter()
+                .enumerate()
+                .filter(|(i, _)| *i != k)
+                .map(|(_, p)| *p)
+                .collect();
+            enable_access(d.inst, &others);
+            pump_for(d.inst, 3000);
+            d.close();
+        }
+        Ok(())
+    })();
+    match result {
+        Ok(()) => 0,
+        Err(e) => {
+            eprintln!("{e}");
+            2
+        }
+    }
+}
+
+/// Whether the plugin's report file (`DS_ARA_OUT`, rewritten atomically) holds a row of this event.
+fn report_has_row(event: &str) -> bool {
+    let Some(path) = std::env::var("DS_ARA_OUT").ok().filter(|p| !p.is_empty()) else {
+        return false;
+    };
+    let needle = format!("\"event\":\"{event}\"");
+    std::fs::read_to_string(path).is_ok_and(|t| t.lines().any(|l| l.contains(&needle)))
+}
+
 /// `restore-busy`: another document starts a long analysis (`--busy synth:<secs>...`), then
 /// this one restores `--archive` and stores at once (a host autosave right after the
 /// restore); the archive goes to `--out`. The process leaves without closing anything.
@@ -2630,7 +2696,18 @@ fn run_restore_busy(bundle: &str, files: &[String], rest: &[String]) -> i32 {
             let loaded = load(bundle)?;
             let mut other = HostDoc::new(&loaded)?;
             other.add_and_request(&busy, "busy")?;
-            std::thread::sleep(Duration::from_millis(1200));
+            // #583 (the same pattern as `editor-refuse`): wait for the row that says the worker took the round of the other
+            // document (false before the request above, bounded, with a time limit text), not for a fixed 1.2 s
+            let waited = Instant::now();
+            while !report_has_row("round_start") {
+                if waited.elapsed() > Duration::from_secs(30) {
+                    return Err(
+                        "time limit: the plugin wrote no round_start row for the busy document within 30 s".into(),
+                    );
+                }
+                pump(other.inst);
+                std::thread::sleep(Duration::from_millis(20));
+            }
             let mut d = HostDoc::with_archive(&loaded, archive)?;
             let (pairs, base) = d.add_only(files, "restore")?;
             println!("{{\"event\":\"host_restore\",\"unix_ns\":{}}}", unix_ns());
@@ -2854,7 +2931,13 @@ fn run_state(bundle: &str) -> i32 {
 }
 
 /// `restore`: a new process loads the archive, no analysis, notes from the blob.
-fn run_restore(bundle: &str, files: &[String], archive: Option<String>, with_access: bool) -> i32 {
+fn run_restore(
+    bundle: &str,
+    files: &[String],
+    archive: Option<String>,
+    with_access: bool,
+    reread: Option<usize>,
+) -> i32 {
     let Some(archive) = archive else {
         eprintln!("restore: no --archive");
         return 64;
@@ -2897,6 +2980,16 @@ fn run_restore(bundle: &str, files: &[String], archive: Option<String>, with_acc
                 // analysis; they have their result, so the plugin must start no round (the
                 // pump runs longer than the settle time and a round would need)
                 enable_access(inst, pairs);
+                if let Some(k) = reread {
+                    // #586: the first read of source k failed (`--fail-reads`); the host turns the access off and on, a good read follows
+                    pump_for(inst, 1500);
+                    let (src, _) = pairs.get(k).ok_or_else(|| format!("--reread {k}: no such source"))?;
+                    for on in [0, 1] {
+                        (dc.enableAudioSourceSamplesAccess
+                            .expect("enableAudioSourceSamplesAccess"))(dc_ref, *src, on);
+                    }
+                    println!("{{\"event\":\"host_reread\",\"source\":{k}}}");
+                }
                 pump_for(inst, 3000);
             }
             let linger = LINGER_MS.load(Ordering::SeqCst);

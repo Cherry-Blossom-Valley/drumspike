@@ -214,8 +214,11 @@ struct SourceState {
     /// track holds no file identity then; when the audio is read, the record is pointed at the new cache file
     /// (or, when the content is another, a new analysis follows). Cleared when the record is right.
     repair: AtomicBool,
-    /// How often the repair of the record failed and was planned again.
+    /// How often the repair of the record had to wait (no audio file yet, no track yet) and was planned again.
     repair_tries: std::sync::atomic::AtomicU32,
+    /// #586: how often the service was busy for the repair (409) and it was planned again. Its own count: many busy
+    /// tries must not use up the wait for the restore (and the other way round).
+    repair_busy: std::sync::atomic::AtomicU32,
     /// When the worker took the request that still waits for the audio of this source.
     requested_at: Mutex<Option<std::time::Instant>>,
     /// M1b10: the role that the DAW name gave at the last snapshot. A new name that gives another
@@ -493,6 +496,42 @@ enum Repair {
     Busy,
     /// A permanent error: one report row, no retry.
     Stop,
+}
+
+/// #586: the repair waits for the restore (no audio file, no track yet) for at most this many tries of 100 ms (10 s) ...
+const REPAIR_WAIT_TRIES: u32 = 100;
+/// ... and for a service that is busy for the same time, counted apart.
+const REPAIR_BUSY_TRIES: u32 = 100;
+
+/// What to do after one try of the repair.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum RepairPlan {
+    /// Look again in [`DEFER_EVERY`].
+    Again,
+    /// The limit is reached by this try: write the one row (`wait` or `busy`).
+    GiveUp(&'static str),
+    /// Nothing more (done, stopped, skipped, or the one row was written before).
+    Nothing,
+}
+
+/// The count of one state (wait or busy) takes the try; past the limit the count stays above it, so the row is
+/// written by exactly one try. A later read of the audio makes one try and plans nothing more (the mark stays).
+fn repair_plan(r: Repair, wait: &std::sync::atomic::AtomicU32, busy: &std::sync::atomic::AtomicU32) -> RepairPlan {
+    let (count, limit, why) = match r {
+        Repair::Wait => (wait, REPAIR_WAIT_TRIES, "wait"),
+        Repair::Busy => (busy, REPAIR_BUSY_TRIES, "busy"),
+        _ => return RepairPlan::Nothing,
+    };
+    let tries = count.load(Ordering::SeqCst);
+    if tries < limit {
+        count.store(tries + 1, Ordering::SeqCst);
+        RepairPlan::Again
+    } else if tries == limit {
+        count.store(tries + 1, Ordering::SeqCst);
+        RepairPlan::GiveUp(why)
+    } else {
+        RepairPlan::Nothing
+    }
 }
 
 /// One audio modification: the creation index of its source (the ARA graph links regions
@@ -2619,8 +2658,10 @@ impl Session {
             return Repair::Wait;
         };
         let outcome = guard("track repair", Err("the track repair panicked".to_string()), || {
+            // #586: one try per call of the service: this runs on the worker with the service lock held, so it never
+            // sleeps there; a busy service (409) is planned again by `repair_and_retry`, 100 ms later
             let mut svc = s.doc.lock_svc();
-            svc.repoint(&[(s.seq, wav.clone())])
+            svc.repoint_once(&[(s.seq, wav.clone())])
         });
         match outcome {
             Ok(rows) if !rows.is_empty() && rows.iter().all(|r| r.after == "ok") => {
@@ -2662,27 +2703,22 @@ impl Session {
         }
     }
 
-    /// Run [`Self::repair_restored`] and plan the retry it asks for (every 100 ms; a wait for the service ends after
-    /// 10 s, a busy service after the other deferrals). Rows are written once, not on every try.
+    /// Run [`Self::repair_restored`] and plan the retry it asks for (every 100 ms; a wait for the restore ends after
+    /// 10 s, a busy service after 10 s as well, each with its own count). Rows are written once, not on every try.
     fn repair_and_retry(&self, s: &Arc<SourceState>) {
         let r = self.repair_restored(s);
-        let (retry, limit) = match r {
-            Repair::Wait => (true, 100),
-            Repair::Busy => (true, DEFER_MAX_TRIES),
-            _ => (false, 0),
-        };
-        if !retry {
-            return;
-        }
-        let tries = s.repair_tries.fetch_add(1, Ordering::SeqCst);
-        if tries < limit {
-            defer_msg(Msg::Ready(s.clone()));
-        } else {
-            self.log(
-                json!({"event": "track_repair_failed", "doc": s.doc.id(), "name": s.props().name, "error": "gave up"})
+        match repair_plan(r, &s.repair_tries, &s.repair_busy) {
+            RepairPlan::Again => defer_msg(Msg::Ready(s.clone())),
+            RepairPlan::GiveUp(why) => {
+                // ONE row: the plan names this once; later reads try once and plan nothing
+                self.log(
+                    json!({"event": "track_repair_failed", "doc": s.doc.id(), "name": s.props().name,
+                        "error": "gave up", "why": why})
                     .to_string(),
-            );
-            self.write_out();
+                );
+                self.write_out();
+            }
+            RepairPlan::Nothing => {}
         }
     }
 
@@ -2862,6 +2898,11 @@ impl Session {
                         set_fail(&s, firstopen::Fail::Read);
                     }
                 } else if !s.removed.load(Ordering::SeqCst) {
+                    // #586 (`DS_ARA_RESTORE_FAULT=fail-clears-mark`: the failed read of a restored track gives up its repair, so the
+                    // next good read repairs nothing): the mark stays, the next good read points the record at the new file
+                    if crate::test_switch("DS_ARA_RESTORE_FAULT").as_deref() == Ok("fail-clears-mark") {
+                        s.repair.store(false, Ordering::SeqCst);
+                    }
                     set_fail(&s, firstopen::Fail::Read); // M1d4: the first read failed: the page says so (the round marks it later)
                 }
                 s.doc.states_changed();
@@ -3461,6 +3502,13 @@ impl Session {
     /// A destroyed source: its track leaves the project, its cached audio goes.
     fn remove_track(&'static self, src: &Arc<SourceState>, sources_left: usize) -> Result<(), String> {
         let doc = &src.doc;
+        // #586 (`DS_ARA_RESTORE_FAULT=keep-removed`): the track of a restored source that goes before its audio was read
+        // stays in the project (its record points at a file that is gone), so the track that comes back gets a second record
+        if crate::test_switch("DS_ARA_RESTORE_FAULT").as_deref() == Ok("keep-removed")
+            && src.repair.load(Ordering::SeqCst)
+        {
+            return Ok(());
+        }
         let removed = {
             let worker_doc = doc.clone();
             let seq = src.seq;
@@ -4519,6 +4567,7 @@ unsafe extern "C" fn dc_createAudioSource(
                 restored_count: std::sync::atomic::AtomicI64::new(0),
                 repair: AtomicBool::new(false),
                 repair_tries: std::sync::atomic::AtomicU32::new(0),
+                repair_busy: std::sync::atomic::AtomicU32::new(0),
                 requested_at: Mutex::new(None),
                 label_role_seen: Mutex::new(None),
                 role_touch_pending: AtomicBool::new(false),
@@ -5571,6 +5620,7 @@ unsafe extern "C" fn dc_restoreObjectsFromArchive(
                         u64::from_str_radix(&a.content_hash, 16).ok();
                     src.restored_count.store(a.sample_count, Ordering::SeqCst);
                     src.repair_tries.store(0, Ordering::SeqCst);
+                    src.repair_busy.store(0, Ordering::SeqCst);
                     src.repair.store(true, Ordering::SeqCst);
                     if let Some((_, events)) = events_ok.iter().find(|(k, _)| **k == track) {
                         if let Ok(mut t) = src.track.lock() {
@@ -6771,6 +6821,7 @@ mod tests {
             restored_count: std::sync::atomic::AtomicI64::new(0),
             repair: AtomicBool::new(false),
             repair_tries: std::sync::atomic::AtomicU32::new(0),
+            repair_busy: std::sync::atomic::AtomicU32::new(0),
             requested_at: Mutex::new(None),
             label_role_seen: Mutex::new(None),
             role_touch_pending: AtomicBool::new(false),
@@ -7980,6 +8031,46 @@ mod tests {
         assert!(!session().absorb(Msg::Ready(c.clone()), &mut st));
         assert!(c.stale.load(Ordering::SeqCst) && !c.repair.load(Ordering::SeqCst));
         assert_eq!(st.requested.len(), 1, "one round analyses it");
+    }
+
+    #[test]
+    fn the_repair_counts_the_wait_and_the_busy_state_apart_with_a_limit_and_one_row() {
+        // #586: a busy service gives up after about 10 s with ONE row; the wait for the restore has its own count
+        use std::sync::atomic::AtomicU32;
+        let (wait, busy) = (AtomicU32::new(0), AtomicU32::new(0));
+        let mut again = 0;
+        let mut rows = 0;
+        for _ in 0..1000 {
+            match repair_plan(Repair::Busy, &wait, &busy) {
+                RepairPlan::Again => again += 1,
+                RepairPlan::GiveUp(why) => {
+                    assert_eq!(why, "busy");
+                    rows += 1;
+                }
+                RepairPlan::Nothing => {}
+            }
+        }
+        assert_eq!(again, REPAIR_BUSY_TRIES, "bounded: 100 tries of 100 ms are about 10 s");
+        assert_eq!(rows, 1, "one row when it gives up, not one per later read");
+        assert_eq!(wait.load(Ordering::SeqCst), 0, "the busy tries did not use up the wait");
+        // the wait for the restore still has its whole time, and its own row
+        assert_eq!(repair_plan(Repair::Wait, &wait, &busy), RepairPlan::Again);
+        for _ in 1..REPAIR_WAIT_TRIES {
+            assert_eq!(repair_plan(Repair::Wait, &wait, &busy), RepairPlan::Again);
+        }
+        assert_eq!(repair_plan(Repair::Wait, &wait, &busy), RepairPlan::GiveUp("wait"));
+        assert_eq!(repair_plan(Repair::Wait, &wait, &busy), RepairPlan::Nothing);
+        // the other way round: many waits leave the busy count alone
+        let (wait, busy) = (AtomicU32::new(0), AtomicU32::new(0));
+        for _ in 0..50 {
+            repair_plan(Repair::Wait, &wait, &busy);
+        }
+        assert_eq!(repair_plan(Repair::Busy, &wait, &busy), RepairPlan::Again);
+        assert_eq!(busy.load(Ordering::SeqCst), 1);
+        // a result that is final plans nothing
+        for r in [Repair::Done, Repair::Stop, Repair::Skip, Repair::Stale] {
+            assert_eq!(repair_plan(r, &wait, &busy), RepairPlan::Nothing);
+        }
     }
 
     #[test]

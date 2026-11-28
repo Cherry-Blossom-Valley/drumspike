@@ -475,6 +475,9 @@ pub struct DocService {
     dirty: bool,
     /// F6: a repointed record is in the open project but the project was not saved yet (the save failed or is due).
     save_owed: bool,
+    /// #586: a record was pointed at its new file and the call that did it ended with an error (the save was busy): the
+    /// next call that ends well tells the page to read the project again, as the call that failed could not.
+    reload_owed: bool,
     /// The test round that fails once (`DS_ARA_SCENARIO=fail-first-round`) has failed.
     failed_once: bool,
     /// How many rounds `DS_ARA_SCENARIO=fail-rounds:<n>` has failed.
@@ -625,18 +628,87 @@ impl Canceller {
 /// 409. The call is tried again for at most 1 s (R4: the worker holds the document lock meanwhile);
 /// a 409 after that goes back to the worker, which puts the round or the removal back in the
 /// queue like a job of the page.
-fn retry_busy<T>(mut f: impl FnMut() -> Result<T, drumspike_app::AppError>) -> Result<T, drumspike_app::AppError> {
+fn retry_busy<T>(f: impl FnMut() -> Result<T, drumspike_app::AppError>) -> Result<T, drumspike_app::AppError> {
+    call_busy(true, f)
+}
+
+/// [`retry_busy`] with the choice (#586): `retry` false makes ONE try and gives a 409 back at once. The repair of a
+/// restored track uses that: it runs on the worker with the service lock held, so it must never sleep there; the
+/// worker plans the next try itself, 100 ms later.
+fn call_busy<T>(
+    retry: bool,
+    mut f: impl FnMut() -> Result<T, drumspike_app::AppError>,
+) -> Result<T, drumspike_app::AppError> {
     let mut tries = 0;
     loop {
-        match f() {
+        #[cfg(test)]
+        let answer = busy_test::call(&mut f);
+        #[cfg(not(test))]
+        let answer = f();
+        match answer {
             Err(e)
-                if e.code == 409 && tries < 10 && switch("DS_ARA_ROUND_FAULT").as_deref() != Some("no-page-wait") =>
+                if retry
+                    && e.code == 409
+                    && tries < 10
+                    && switch("DS_ARA_ROUND_FAULT").as_deref() != Some("no-page-wait") =>
             {
                 tries += 1;
+                #[cfg(test)]
+                busy_test::SLEEPS.with(|c| c.set(c.get() + 1));
                 std::thread::sleep(std::time::Duration::from_millis(100));
             }
             other => return other,
         }
+    }
+}
+
+/// The test seam of the busy path: a service call that answers 409 as often as a test says (this thread only).
+#[cfg(test)]
+mod busy_test {
+    use std::cell::Cell;
+    thread_local! {
+        /// Calls that still answer 409 (`u32::MAX`: for ever).
+        pub static FORCE_BUSY: Cell<u32> = const { Cell::new(0) };
+        /// Calls that pass before the forced answers begin.
+        pub static SKIP: Cell<u32> = const { Cell::new(0) };
+        /// Calls made (also the forced ones).
+        pub static CALLS: Cell<u32> = const { Cell::new(0) };
+        /// Sleeps of the retry loop.
+        pub static SLEEPS: Cell<u32> = const { Cell::new(0) };
+    }
+
+    pub fn call<T>(f: &mut impl FnMut() -> Result<T, drumspike_app::AppError>) -> Result<T, drumspike_app::AppError> {
+        CALLS.with(|c| c.set(c.get() + 1));
+        if SKIP.with(|k| {
+            let n = k.get();
+            k.set(n.saturating_sub(1));
+            n > 0
+        }) {
+            return f();
+        }
+        let busy = FORCE_BUSY.with(|b| {
+            let n = b.get();
+            if n > 0 && n != u32::MAX {
+                b.set(n - 1);
+            }
+            n > 0
+        });
+        if busy {
+            return Err(drumspike_app::AppError::conflict("a job of the page is running"));
+        }
+        f()
+    }
+
+    pub fn reset(force: u32) {
+        reset_after(0, force);
+    }
+
+    /// The first `skip` calls pass, then `force` calls answer 409.
+    pub fn reset_after(skip: u32, force: u32) {
+        SKIP.with(|k| k.set(skip));
+        FORCE_BUSY.with(|b| b.set(force));
+        CALLS.with(|c| c.set(0));
+        SLEEPS.with(|c| c.set(0));
     }
 }
 
@@ -666,6 +738,7 @@ impl DocService {
             snaps: HashMap::new(),
             dirty: false,
             save_owed: false,
+            reload_owed: false,
             failed_once: false,
             failed_rounds: 0,
             only: None,
@@ -1423,6 +1496,20 @@ impl DocService {
     ///
     /// A message when the service refuses the new record (the old one is put back) or the save.
     pub fn repoint(&mut self, wavs: &[(usize, PathBuf)]) -> Result<Vec<RepairRow>, String> {
+        self.repoint_with(wavs, true)
+    }
+
+    /// [`Self::repoint`] for the repair after a read (#586): every call of the service is tried ONCE. A busy service
+    /// (409) comes back as the error text that starts with `409`, at once; nothing sleeps with the service lock held.
+    ///
+    /// # Errors
+    ///
+    /// As [`Self::repoint`].
+    pub fn repoint_once(&mut self, wavs: &[(usize, PathBuf)]) -> Result<Vec<RepairRow>, String> {
+        self.repoint_with(wavs, false)
+    }
+
+    fn repoint_with(&mut self, wavs: &[(usize, PathBuf)], retry: bool) -> Result<Vec<RepairRow>, String> {
         let mut rows = Vec::new();
         if switch("DS_ARA_RESTORE_FAULT").as_deref() == Some("no-repair") {
             return Ok(rows);
@@ -1445,7 +1532,8 @@ impl DocService {
             let before = record["status"].as_str().unwrap_or("missing").to_string();
             let mut repointed = false;
             if before != "ok" {
-                let removed = retry_busy(|| svc.tracks_remove(&sid, std::slice::from_ref(&name), true)).map_err(err)?;
+                let removed =
+                    call_busy(retry, || svc.tracks_remove(&sid, std::slice::from_ref(&name), true)).map_err(err)?;
                 let old_row = removed["snapshot"][0].clone();
                 let mut track = old_row["track"].clone();
                 let fresh = serde_json::to_value(track_layout(&s, &dir)).unwrap_or(Value::Null);
@@ -1474,6 +1562,7 @@ impl DocService {
                 }
                 repointed = true;
                 self.save_owed = true;
+                self.reload_owed = true;
             }
             let all = svc.tracks_get(&sid).map_err(err)?;
             let record = &all["tracks"][name.as_str()];
@@ -1482,7 +1571,7 @@ impl DocService {
                 track: name.clone(),
                 before,
                 after: record["status"].as_str().unwrap_or("missing").to_string(),
-                repointed,
+                repointed: repointed || self.reload_owed,
                 events_json: serde_json::to_string(&events["events"]).unwrap_or_default(),
                 role: record["role"].as_str().unwrap_or_default().to_string(),
                 note: record["note"].as_i64().unwrap_or(-1),
@@ -1490,9 +1579,10 @@ impl DocService {
         }
         // a save that failed stays owed: the next call finds the track `ok` in memory and saves again
         if self.save_owed {
-            retry_busy(|| svc.project_save(&sid)).map_err(err)?;
+            call_busy(retry, || svc.project_save(&sid)).map_err(err)?;
             self.save_owed = false;
         }
+        self.reload_owed = false;
         Ok(rows)
     }
 
@@ -2828,6 +2918,92 @@ mod tests {
         // S5: the text of a busy service starts with the code, the way the round deferral reads it
         assert!(err(drumspike_app::AppError::conflict("a job of the page is running")).starts_with("409"));
         again.shutdown();
+        let _ = std::fs::remove_dir_all(&cache);
+    }
+
+    /// A restored track whose cache file is back but whose record has no identity (status `changed`), with its service.
+    fn changed_restored_track(name: &str) -> (std::path::PathBuf, DocService, SourceSnapshot) {
+        let cache = scratch(name);
+        let id = new_doc_id();
+        let mut doc = DocService::new(cache.clone(), id.clone());
+        let snap = snapshot_of(&cache, &id, 0, "kick.wav");
+        let stored = doc.analyse(std::slice::from_ref(&snap), false).unwrap();
+        doc.shutdown();
+        let bytes = std::fs::read(&snap.wav).unwrap();
+        std::fs::remove_file(&snap.wav).unwrap();
+        let mut again = DocService::new(cache.clone(), id);
+        let mut restored_snap = snap.clone();
+        restored_snap.ready = false;
+        again
+            .restore(&[RestoredTrack {
+                snapshot: restored_snap,
+                track: "kick".into(),
+                events: stored.events["kick"].clone(),
+                settings: Map::new(),
+            }])
+            .unwrap();
+        std::fs::write(&snap.wav, bytes).unwrap();
+        (cache, again, snap)
+    }
+
+    #[test]
+    fn the_repair_makes_one_try_on_a_busy_service_and_never_sleeps() {
+        // #586: the repair runs on the worker with the service lock held; a 409 must come back at once, and the
+        // retry helper (up to 10 sleeps of 100 ms) stays for the round's own calls
+        let (cache, mut doc, snap) = changed_restored_track("repair-busy");
+        busy_test::reset(u32::MAX);
+        let e = doc.repoint_once(&[(0, snap.wav.clone())]).unwrap_err();
+        assert!(e.starts_with("409"), "the worker reads the code in front: {e}");
+        assert_eq!(busy_test::SLEEPS.with(|c| c.get()), 0, "the retry helper never slept");
+        assert_eq!(busy_test::CALLS.with(|c| c.get()), 1, "one try");
+        // the same call through the retry helper (the round): bounded at 10 sleeps, 11 tries
+        busy_test::reset(u32::MAX);
+        let e = doc.repoint(&[(0, snap.wav.clone())]).unwrap_err();
+        assert!(e.starts_with("409"));
+        assert_eq!(
+            busy_test::SLEEPS.with(|c| c.get()),
+            10,
+            "the round keeps its bounded retry"
+        );
+        assert_eq!(busy_test::CALLS.with(|c| c.get()), 11);
+        // nothing was changed by the busy tries: the track is still the restored one, and a free service repairs it
+        busy_test::reset(0);
+        let rows = doc.repoint_once(&[(0, snap.wav.clone())]).unwrap();
+        assert_eq!(
+            (rows[0].before.as_str(), rows[0].after.as_str(), rows[0].repointed),
+            ("changed", "ok", true)
+        );
+        assert_eq!(busy_test::SLEEPS.with(|c| c.get()), 0);
+        doc.shutdown();
+        let _ = std::fs::remove_dir_all(&cache);
+    }
+
+    #[test]
+    fn a_save_that_is_busy_after_the_repair_is_saved_and_announced_by_the_next_try() {
+        // #586: the record is pointed, the save answers 409 (one try): the call fails with the code in front; the next
+        // call finds the track ok, saves, and still reports the repoint so the page reads the project again
+        let (cache, mut doc, snap) = changed_restored_track("repair-busy-save");
+        let wavs = [(0, snap.wav.clone())];
+        // the first busy-aware call (the remove of the old record) passes, the second (the save) answers 409
+        busy_test::reset_after(1, u32::MAX);
+        let e = doc.repoint_once(&wavs).unwrap_err();
+        assert!(e.starts_with("409"), "{e}");
+        assert_eq!(busy_test::SLEEPS.with(|c| c.get()), 0, "one try, no sleep");
+        assert!(
+            doc.save_owed && doc.reload_owed,
+            "the pointed record waits for its save and its reload"
+        );
+        busy_test::reset(0);
+        let rows = doc.repoint_once(&wavs).unwrap();
+        assert!(
+            rows[0].after == "ok" && rows[0].repointed,
+            "the next try saves and still tells the page (it could not be told before)"
+        );
+        assert!(!doc.save_owed && !doc.reload_owed);
+        // a track that is online and has nothing owed is not announced again
+        let rows = doc.repoint_once(&wavs).unwrap();
+        assert!(!rows[0].repointed);
+        doc.shutdown();
         let _ = std::fs::remove_dir_all(&cache);
     }
 
