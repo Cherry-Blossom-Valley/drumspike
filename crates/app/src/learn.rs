@@ -1385,7 +1385,7 @@ impl Service {
             .filter(|m| Recipe::parse(m).is_some())
             .unwrap_or(METHOD)
             .to_string();
-        let recipe = Recipe::parse(&method).expect("checked above");
+        let recipe = Recipe::parse(&method).unwrap_or(Recipe::Patch);
         let mut entries: Vec<Value> = Vec::new();
         if !picked.is_empty() {
             // the audio of `from`, outside the project lock (a decode may take a while)
@@ -1415,7 +1415,7 @@ impl Service {
             let not_before = counts(l).1 + row_counts(l).1;
             let mut row: Vec<Value> = l.get("row").and_then(Value::as_array).cloned().unwrap_or_default();
             // the last mark wins, as on one file: an older copy of an example that the new copies mark again leaves its entry
-            let fresh: Vec<f64> = entries.iter().flat_map(|e| ats_of(e)).collect();
+            let fresh: Vec<f64> = entries.iter().flat_map(ats_of).collect();
             for e in &mut row {
                 let keep: Vec<usize> = ats_of(e)
                     .iter()
