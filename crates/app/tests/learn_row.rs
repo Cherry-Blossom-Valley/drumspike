@@ -598,7 +598,9 @@ fn a_partial_remove_example_is_copied_again_with_the_next_adopt() {
         .track_learn_mark(&r.sid, "a", "not", None, Some(first_of(&r, "a", &r.clicks)))
         .unwrap();
     let id2 = m2["mark"]["id"].as_str().unwrap().to_string();
-    r.svc.track_learn_adopt(&r.sid, "b", "a", Some(std::slice::from_ref(&id2))).unwrap();
+    r.svc
+        .track_learn_adopt(&r.sid, "b", "a", Some(std::slice::from_ref(&id2)))
+        .unwrap();
     let row_b = learn_of(&r, "b")["row"].as_array().unwrap().clone();
     let copy = |i: &str| row_b.iter().find(|e| e["id"] == i).cloned();
     let old = copy(&id).expect("the copy of the changed mark is still there");
