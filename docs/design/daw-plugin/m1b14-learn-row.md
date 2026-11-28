@@ -229,3 +229,47 @@ The ENST gate and the real-session check are not run: no detector code and no si
 4. A hit nearest to an adopted "not" example in file B: does it go even when edited, as for an own "not" example? Pick: no. An
    adopted example acts through the score only, and the score never takes out an edited hit (section 1).
 5. The nudge at the edge of a clip: stop at the edge (this note), or jump into the next clip of the same file? Pick: stop.
+
+## 11. What was built, and where it differs from the plan above (rulings of the coordinator included)
+
+Rulings that held as written: copy at the time of the action (R3), a file that joins later follows only on the button, with a visible
+hint (R1), counts after the action and one undo (R2), an adopted "not" example never takes out an edited hit (R4, a Rust test), the
+nudge stops at the clip edge (R5), the guard is reused per file (R6).
+
+- **Where a copy lives (differs from section 2, option B).** The copies are NOT marks with a `from` key. They are `learn.row`, a list
+  next to `marks`: `[{id, from, kind, fps, atk, at}]`. `fps` are the raw feature vectors of the examples measured on the audio of `from`
+  (the recipe of the receiving file), `atk` their attack times (ms), `at` their times in the file of origin. Reason: the pick runs in
+  places that have no service and no second decode (the analysis job, Re-analyze, the re-pick), so the vectors must be in the learn
+  object. Marks stay what they were, so the page, the marks drawing, the cap and every time rule read nothing new. The cost is size:
+  at most 64 examples per kind, a vector of a few hundred numbers each. `check_learn` validates `row` (a list, finite numbers, `atk` and
+  `at` as long as `fps`, at most 4096 numbers a vector, the cap per kind with the marks). A copy of an example that the same file marks
+  again (the last mark wins, as on one file) replaces the older copy. A file that only holds copies has `marks: []`, so the undo's
+  `track_learn_set` can take the object back.
+- **How the copies act.** `learn_pick`, `track_learn_scores` and the attack gate read `learn.row` through `Foreign` and add the vectors
+  to the "this" and "not" vectors of the score. Nothing else reads them: not the time rules, not the Re-analyze rule 5, not the sweep of
+  learned hits (the sweep is skipped while the file holds a copied "this" example, so a hit that a copy added is not swept). A file that
+  holds only copied "not" examples is a Forget-only file: the attack gate runs with the attack times measured on the audio of origin.
+  `Foreign` is empty without `row`, and then `score_all_with` is `score_all`.
+- **What the guard does today, and for a row.** After every Learn step the answer carries `learn_out_before`, `learn_out_after`, `hits`,
+  `hits_before` of the file. `lnGuard` asks "Keep or Undo" when the step takes out more than `max(10, 25 % of the output hits before)` more
+  hits, or adds more than that many. No new threshold. For a row the page runs it once for each audio file in the order of the files, with
+  the file named by its place on the DAW track ("audio file 2 of 2 of Drums"); the first "Undo" is the one group undo and stops the
+  questions. The status line after the action says the total and the count per audio file, in DAW words.
+- **The hint of R1.** The status line shows "N audio file(s) of this track do/does not follow its Learn marks yet" with "Apply" when a file
+  of a DAW track lacks a copy of a mark of another file of the track. "Apply" is the same command, one undo step.
+- **Not built, stated limits.** Remove Example, Flip and Forget Examples of one file are not copied to the other files (they do not know
+  the copy). "Forget Examples of Track" of a file removes its copies too. The Learn Filter check box of a file that holds only copies is
+  off (it needs an own mark); the copies filter when the file's `on` is true, which the first copied "not" example sets as on one file.
+- **The nudge (R5), amended.** The cause is not the choice of the clip in `HT.clampTo`. The nudge of ONE hit already stops at the clip
+  edge. The nudge of a RANGE (`rangeNudge`, `move-many`) did not call `HT.clampTo`, so a range moved hits across the join into the next
+  clip of the same file. The fix is the one call in `rangeNudge`. The page test fails without it (the hit left its clip) and passes with it.
+- **`lnApplyOp` (R9).** It answers a promise only when called inside a group (a third argument `inGroup`); a plain Learn undo or redo
+  returns nothing, exactly as before, and a test says so.
+- **Plain-page lines that run without host mode and changed** (R9): `applyOp` (a third parameter and the Learn line returns what
+  `lnApplyOp` gives, which is `undefined` outside a group), `groupApplyOp` (the third argument of the step call, the roll-back loop,
+  the message only when a roll-back fails; the text of a clean refusal is the same), `lnPush` (now `pushUndo(lnStep(...))`, the same
+  object), `lnGuard` (returns its promise and names the file with `lnFileText`, the key outside a DAW), `lnApplyOp` (`return true` inside
+  the queue entry), `learnMark` (the peers are empty, so the old `lnPush` and `lnGuard` run), `paramsFieldCommit` (one line at the top;
+  `HT.srcsOf` gives `[name]` outside a DAW), `rangeNudge` (`HT.clampTo` returns its argument outside a DAW), `updateStatus` (one call that
+  removes nothing when no note exists), `lnInspector` (the copies count is 0). Twin tests prove each; no expected value of an existing
+  test changed.

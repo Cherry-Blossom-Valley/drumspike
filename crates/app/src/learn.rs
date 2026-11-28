@@ -456,7 +456,11 @@ pub fn check_learn(learn: &Map<String, Value>) -> Result<(), AppError> {
                             .is_some_and(|v| !v.is_empty() && v.len() <= MAX_FP_DIM && nums(v))
                     })
                 })
-                && atk.is_some_and(|a| nums(a) && Some(a.len()) == fps.map(Vec::len));
+                && atk.is_some_and(|a| nums(a) && Some(a.len()) == fps.map(Vec::len))
+                && e.get("at").is_none_or(|a| {
+                    a.as_array()
+                        .is_some_and(|a| nums(a) && Some(a.len()) == fps.map(Vec::len))
+                });
             if !ok {
                 return bad(
                     "every `row` entry needs `id`, `from`, `kind`, `fps` (lists of numbers) and `atk` (one number each)",
@@ -1348,10 +1352,16 @@ impl Service {
                 learn_of(&g.track(&origin)?.extra).unwrap_or_default(),
             )
         };
-        let have = |id: &str| {
-            mine.get("row")
-                .and_then(Value::as_array)
-                .is_some_and(|r| r.iter().any(|e| e["id"] == id && e["from"] == origin.as_str()))
+        // a copy exists when the mark's id, kind and examples are the same (an id can come back for another mark after a flip)
+        let have = |m: &Value| {
+            mine.get("row").and_then(Value::as_array).is_some_and(|r| {
+                r.iter().any(|e| {
+                    e["id"] == m["id"]
+                        && e["from"] == origin.as_str()
+                        && e["kind"] == m["kind"]
+                        && ats_of(e) == ats_of(m)
+                })
+            })
         };
         let source: Vec<Value> = marks_of(&theirs).to_vec();
         if let Some(ids) = ids {
@@ -1365,7 +1375,7 @@ impl Service {
             .into_iter()
             .filter(|m| {
                 let id = m["id"].as_str().unwrap_or_default();
-                ids.map_or(true, |l| l.iter().any(|x| x == id)) && !have(id)
+                ids.is_none_or(|l| l.iter().any(|x| x == id)) && !have(m)
             })
             .collect();
         let was_on = self.learn_pick_runs(sid, &target);
@@ -1393,6 +1403,7 @@ impl Service {
                     "id": m["id"], "from": origin, "kind": m["kind"],
                     "fps": fps.iter().map(|f| f.iter().map(|&v| short(v)).collect::<Vec<f64>>()).collect::<Vec<_>>(),
                     "atk": atk,
+                    "at": ats,
                 }));
             }
         }
@@ -1403,6 +1414,26 @@ impl Service {
             }
             let not_before = counts(l).1 + row_counts(l).1;
             let mut row: Vec<Value> = l.get("row").and_then(Value::as_array).cloned().unwrap_or_default();
+            // the last mark wins, as on one file: an older copy of an example that the new copies mark again leaves its entry
+            let fresh: Vec<f64> = entries.iter().flat_map(|e| ats_of(e)).collect();
+            for e in &mut row {
+                let keep: Vec<usize> = ats_of(e)
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, a)| e["from"] != origin.as_str() || !fresh.iter().any(|f| (f - **a).abs() < SAME_HIT))
+                    .map(|(i, _)| i)
+                    .collect();
+                let n = e["fps"].as_array().map_or(0, Vec::len);
+                if keep.len() == n || ats_of(e).len() != n {
+                    continue;
+                }
+                for k in ["fps", "atk", "at"] {
+                    if let Some(a) = e[k].as_array() {
+                        e[k] = Value::Array(keep.iter().filter_map(|&i| a.get(i).cloned()).collect());
+                    }
+                }
+            }
+            row.retain(|e| e["fps"].as_array().is_some_and(|a| !a.is_empty()));
             row.extend(entries.iter().cloned());
             l.insert("row".into(), Value::Array(row));
             let (a, b) = (counts(l), row_counts(l));
@@ -1411,6 +1442,7 @@ impl Service {
                     "a track holds at most {MAX_EXAMPLES} examples of each kind: use Forget or remove old examples"
                 )));
             }
+            l.entry("marks").or_insert(json!([])); // check_learn wants the list, so the undo's learn_set takes the object back
             l.entry("on").or_insert(json!(false));
             l.entry("threshold").or_insert(json!(0.5));
             l.entry("auto").or_insert(json!(true));

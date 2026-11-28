@@ -187,10 +187,11 @@ function lnApply(track, learn, r) {   // the new learn object of a track from th
   if (window.DSShell && DSShell.sync) DSShell.sync();   // Hits > Learn Filter shows the filter of the selected track
   return before;
 }
-function lnPush(r, before, label, t) {   // P4-6c: one undo step of a Learn change: the learn object and, when the hits changed, their snapshot; P4-40a: its label and place
-  pushUndo({ type: "learn", track: r.track, before, after: r.learn || null, ...(LN.snap || {}),
-    ...(label ? { label, where: { track: r.track, t: Number.isFinite(t) ? t : null } } : {}) });
+function lnStep(r, before, label, t) {   // P4-6c: one undo step of a Learn change: the learn object and, when the hits changed, their snapshot; P4-40a: its label and place
+  return { type: "learn", track: r.track, before, after: r.learn || null, ...(LN.snap || {}),
+    ...(label ? { label, where: { track: r.track, t: Number.isFinite(t) ? t : null } } : {}) };
 }
+function lnPush(r, before, label, t) { pushUndo(lnStep(r, before, label, t)); }
 function lnAdopt(track, f) {   // P4-6c: the service's hits after a Learn change; the page ids and the selected hit stay
   const old = S.events[track] || [], selT = S.sel && S.sel.track === track && old[S.sel.index] ? old[S.sel.index].t : null;
   S.events[track] = adoptHits(f.events, old, [], []);
@@ -242,25 +243,91 @@ function lnGuardAdds(r) {   // P4-38b: the hits the step ADDS beyond max(10, 25 
   const more = r.hits - r.hits_before;
   return more > Math.max(10, 0.25 * r.hits_before) ? more : 0;
 }
-function lnGuard(r) {   // not awaited by the Learn queue: the Undo button joins that queue
-  const adds = lnGuardAdds(r);
+function lnGuard(r) {   // not awaited by the Learn queue: the Undo button joins that queue. #587: answers "undo" when the user chose Undo, else nothing
+  const adds = lnGuardAdds(r), who = lnFileText(r.track);
   if (!lnGuardCuts(r)) {
-    if (!adds) return;
-    askConfirm({ title: `Learn adds many hits to ${r.track}`,
+    if (!adds) return Promise.resolve();
+    return askConfirm({ title: `Learn adds many hits to ${who}`,
       msg: `Learn now adds ${adds} hits (before: ${r.hits_before}). The examples may be mixed up.`,
       buttons: [{ label: "Keep", act: "keep" }, { label: "Undo", act: "undo", cls: "primary" }] }).then(async a => {
       if (a !== "undo") return;
       await LN.chain;   // the step is on top of the undo stack once the queue is empty
       undo();
+      return "undo";
     });
-    return;
   }
-  askConfirm({ title: `Learn takes many hits out of ${r.track}`,
+  return askConfirm({ title: `Learn takes many hits out of ${who}`,
     msg: `Learn now takes ${r.learn_out_after} of ${r.hits} hits out (before: ${r.learn_out_before}). The examples may be mixed up.`,
     buttons: [{ label: "Keep", act: "keep" }, { label: "Undo", act: "undo", cls: "primary" }] }).then(async a => {
     if (a !== "undo") return;
     await LN.chain;   // the step is on top of the undo stack once the queue is empty
     undo();
+    return "undo";
+  });
+}
+/* ---------------- #587: a Learn rule acts on the whole DAW track (host mode) ----------------
+   A DAW track can hold clips of several audio files. A mark made in a clip is copied to the other audio files of the track
+   (track_learn_adopt: the service measures its examples on the audio of the file where it was made), so Learn This and Forget This
+   act on the whole track. One action is ONE undo step: the group of the steps of the files. With one file, and in the standalone page,
+   lnPeers is empty and nothing here runs. Design: docs/design/daw-plugin/m1b14-learn-row.md. */
+function lnRowCopies(track) { const row = HT.on() && S.tracks[track] && S.tracks[track].learn && S.tracks[track].learn.row; return Array.isArray(row) ? row.reduce((n, x) => n + (Array.isArray(x.fps) ? x.fps.length : 0), 0) : 0; }
+function lnPeers(track) { return HT.on() ? HT.srcsOf(track).filter(n => n !== track && S.tracks[n] && !S.tracks[n].follows) : []; }   // the other audio files of the DAW track
+function lnFileText(track) {   // the file in the words of a DAW: its place on the DAW track (the key of the file is never shown); the key itself with the mode off
+  const p = HT.place(track);
+  return p && p.of > 1 ? `audio file ${p.n} of ${p.of} of ${trackLabel(track)}` : track;
+}
+function lnRowText(answers) {   // the total and the count per audio file, after one action on a track with several files
+  const out = answers.reduce((n, a) => n + (a.learn_out_after || 0), 0), hits = answers.reduce((n, a) => n + (a.hits || 0), 0);
+  const per = answers.slice().sort((a, b) => HT.place(a.track).n - HT.place(b.track).n)
+    .map(a => `audio file ${HT.place(a.track).n}: ${a.learn_out_after || 0} of ${a.hits || 0}`).join(", ");
+  return `Learn takes ${out} of ${hits} hits out of ${trackLabel(answers[0].track)} (${per})`;
+}
+async function lnGuardAll(answers) { for (const a of answers) if (await lnGuard(a) === "undo") return; }   // the guard of Learn, for each audio file; one Undo takes the whole step back
+function lnRowGaps() {   // the audio files of a DAW track that do not follow the marks of another file of the track yet: [{to, from, ids}]
+  if (!HT.on()) return [];
+  const gaps = [];
+  for (const e of HT.view) {
+    if (e.srcs.length < 2) continue;
+    for (const to of e.srcs) {
+      const row = (S.tracks[to] && S.tracks[to].learn && S.tracks[to].learn.row) || [];
+      for (const from of e.srcs) {
+        if (from === to || (S.tracks[to] && S.tracks[to].follows)) continue;
+        const ids = (((S.tracks[from] || {}).learn || {}).marks || []).filter(m => !row.some(x => x.from === from && x.id === m.id && x.kind === m.kind)).map(m => m.id);
+        if (ids.length) gaps.push({ to, from, ids });
+      }
+    }
+  }
+  return gaps;
+}
+function lnRowNote() {   // the status line: a file that joined the DAW track later does not follow its marks until the user says so (nothing changes by itself)
+  if (typeof document === "undefined") return;
+  let el = document.getElementById("hostLearnNote");
+  const files = new Set(lnRowGaps().map(g => g.to)).size;
+  if (!files) { if (el) el.remove(); return; }
+  if (!el) {
+    el = document.createElement("span"); el.id = "hostLearnNote"; el.style.color = "#8a93a3";
+    const st = document.getElementById("hostOutsideNote") || document.getElementById("stSel"); st.parentNode.insertBefore(el, st.nextSibling);
+    el.append(document.createElement("span"), document.createTextNode(" "), Object.assign(document.createElement("a"), { href: "#", className: "hostLearnApply", textContent: "Apply", onclick: ev => { ev.preventDefault(); lnApplyRow(); } }));
+  }
+  el.firstChild.textContent = ` · ${files} audio ${files === 1 ? "file" : "files"} of this track ${files === 1 ? "does" : "do"} not follow its Learn marks yet`;
+  el.title = "A Learn mark is copied to the other audio files of its DAW track when it is made. A file that came to the track later has no copy. Apply copies the marks to it (one undo step)";
+}
+function lnApplyRow() {   // the button of the note: copy the marks to the files that lack them, one undo step
+  const gaps = lnRowGaps();
+  if (!gaps.length) return false;
+  return lnQueue(async () => {
+    const steps = [], answers = [];
+    try {
+      for (const g of gaps) {
+        const rr = await B.learnAdopt(S.sid, g.to, g.from, g.ids);
+        const b = lnApply(rr.track, rr.learn, rr);
+        steps.push(lnStep(rr, b, "Apply Learn Marks")); answers.push(rr);
+      }
+    } catch (e) { setMsg(`Apply Learn marks failed: ${errText(e)}`, "error"); }
+    if (!steps.length) return;
+    pushGroup("Apply Learn Marks", steps);
+    setMsg(`Learn marks applied to ${steps.length === 1 ? "one audio file" : `${steps.length} audio files`}. ${lnRowText([...new Map(answers.map(a => [a.track, a])).values()])}`);
+    lnGuardAll(answers);
   });
 }
 function lnOutCounts(target) {   // owner check 2026-10-15: count only what Learn changes; hits the bleed rules or the loudness cut already took out are not "filtered"
@@ -294,18 +361,32 @@ function learnMark(kind) {   // Hits > Learn This (K), Forget This (Shift+K)
     // service (r.filter_on), with the threshold following the examples; K alone never does. One undo step
     // (track_learn_set with the learn before re-picks again)
     const before = lnApply(r.track, r.learn, r);
-    lnPush(r, before, kind === "this" ? "Learn This" : "Forget This", a.hit !== undefined ? a.hit : a.t0); lnGuard(r);
+    const peers = lnPeers(r.track), markId = r.mark && r.mark.id, label = kind === "this" ? "Learn This" : "Forget This", at = a.hit !== undefined ? a.hit : a.t0;
+    let answers = [r];
+    if (peers.length && markId) {   // #587: the other audio files of the DAW track take the mark, all in one undo step
+      const steps = [lnStep(r, before, label, at)];
+      try {
+        for (const p of peers) {
+          const rr = await B.learnAdopt(S.sid, p, r.track, [markId]);
+          const b = lnApply(rr.track, rr.learn, rr);
+          steps.push(lnStep(rr, b, label, at)); answers.push(rr);
+        }
+      } catch (e) { setMsg(`${label}: ${errText(e)}; the audio files before it keep the mark`, "error"); }
+      pushGroup(label, steps);
+      lnGuardAll(answers);
+    } else { lnPush(r, before, label, at); lnGuard(r); }
     lnSetSel(null);
     const w = lnWhat(r), off = !r.learn || r.learn.on !== true;
     const matchHint = kind === "not" && r.learn && r.learn.on && !lnHint(r.learn) ?   // P4-37b: how strict the current Match is (not next to the "Forget This alone" hint)
       `. The current Match takes ${lnOutCounts(r.track).learnOut} similar ${lnOutCounts(r.track).learnOut === 1 ? "hit" : "hits"} out - drag the Match line in the histogram for more or fewer` : "";
     const pre = routed ? `learned on ${r.track} (${name} follows it): ` : `${name}: `;
+    const rowTail = answers.length > 1 ? `. ${lnRowText(answers)}` : "";
     if (r.added_hit != null && r.learn) {   // P4-38b: K on a missed hit added it: the status says what the Add rule does from here (P4-38d: with the filter off too, which a K-add never turns on)
       const tail = `. Learn adds ${lnAddCount(r.track, lnAddOf(r.track))} similar hits (Add ${lnAddOf(r.track).toFixed(2)}) - drag the Add line for more or fewer`;
-      setMsg(`${pre}added 1 hit at ${r.added_hit.toFixed(3)} s and learned it (${w.c.this} learn, ${w.c.not} forget)${r.filter_error ? ` (the filter applies on the next Re-analyze: ${r.filter_error})` : ""}${tail}`);
+      setMsg(`${pre}added 1 hit at ${r.added_hit.toFixed(3)} s and learned it (${w.c.this} learn, ${w.c.not} forget)${r.filter_error ? ` (the filter applies on the next Re-analyze: ${r.filter_error})` : ""}${tail}${rowTail}`);
       return;
     }
-    setMsg(`${pre}${kind === "this" ? "learned" : "Forget This on"} ${w.n} ${w.n === 1 ? "hit" : "hits"}${r.flipped ? `, ${r.flipped} changed kind` : ""} (${w.c.this} learn, ${w.c.not} forget)${r.filter_on ? ", Learn filter on" : ""}${lnResult(r)}${off && kind === "this" ? `. ${LN_HINT_OFF}` : ""}${matchHint}`);
+    setMsg(`${pre}${kind === "this" ? "learned" : "Forget This on"} ${w.n} ${w.n === 1 ? "hit" : "hits"}${r.flipped ? `, ${r.flipped} changed kind` : ""} (${w.c.this} learn, ${w.c.not} forget)${r.filter_on ? ", Learn filter on" : ""}${lnResult(r)}${off && kind === "this" ? `. ${LN_HINT_OFF}` : ""}${matchHint}${rowTail}`);
   });
 }
 function lnTrackFor() { return S.selTrack || (LN.sel && LN.sel.track) || (LN.mark && LN.mark.track) || (S.sel && S.sel.track) || null; }
@@ -523,14 +604,16 @@ function lnHistSetThreshold(name, th) {   // the release of a threshold drag: th
   return lnSetLearn(name, { threshold: v, auto: false }, `similarity threshold ${v.toFixed(2)}`);
 }
 
-function lnApplyOp(op, reverse) {   // applyOp: undo and redo of a Learn step
+function lnApplyOp(op, reverse, wait) {   // applyOp: undo and redo of a Learn step. #587: with `wait` (a step inside a group) it answers true when the service applied it, so the group can take its steps back
   const learn = (reverse ? op.before : op.after) || null, events = reverse ? op.evBefore : op.evAfter;   // P4-6c: the snapshot, exactly
-  lnQueue(async () => {
+  const p = lnQueue(async () => {
     const r = await B.learnSet(S.sid, op.track, learn, events);
     lnApply(r.track, r.learn, r);
     if (LN.mark && !lnLearn(op.track)) lnSetMark(null);
     setMsg(`${reverse ? "undo" : "redo"}: Learn marks of ${op.track}`);
+    return true;
   });
+  if (wait) return p;
 }
 function learnFilter() {   // Hits > Learn Filter (a check item; the shell syncs it): the check box of the Learn row
   const name = lnTrackFor(), learn = name && lnLearn(lnTarget(name));
@@ -563,9 +646,10 @@ function lnInspector() {
   if (sig === LN.sig) return;
   LN.sig = sig; insSumRefresh();
   const follows = tgt !== name;
-  row.querySelector(".lnCount").textContent = learn
+  const copies = lnRowCopies(tgt);   // #587: examples that other audio files of the DAW track made (none outside a DAW)
+  row.querySelector(".lnCount").textContent = (learn
     ? `${follows ? `on ${tgt}: ` : ""}✓ ${c.this}  ✗ ${c.not}${learn.on === false ? "  (filter off)" : ""}${c.this + c.not === 1 ? "  · 1 example: add 2 more for a stable result" : ""}`
-    : follows ? `follows ${tgt}: no examples there` : "Select hits you want and press K";
+    : follows ? `follows ${tgt}: no examples there` : copies ? "" : "Select hits you want and press K") + (copies ? `${learn ? "  · " : ""}${copies} from the other audio files of this track` : "");
   const hintEl = row.querySelector(".lnHintMsg"), hint = lnHint(learn);   // P4-6c: Forget This alone
   if (hintEl) { hintEl.textContent = hint; hintEl.classList.toggle("hidden", !hint); }
   row.querySelector(".lnThis").disabled = !can; row.querySelector(".lnNot").disabled = !can;

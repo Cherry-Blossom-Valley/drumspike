@@ -363,6 +363,22 @@ function hgApplyRepickOp(op, reverse) {   // applyOp: undo and redo of a stored 
 const PARAM_FIELD_DEFAULTS = { refine_lo_ms: -2, refine_hi_ms: 12 };   // the shown defaults (RefineWindow::DEFAULT)
 function paramsFieldCommit(name, key, value) {
   const t = S.tracks[name]; if (!t) return value;
+  const srcs = HT.srcsOf(name);   // #587: the refine window is a setting of the DAW track: every audio file of the row takes it, as one undo step ([name] outside a DAW)
+  if (srcs.length > 1) {
+    const steps = [];
+    for (const n of srcs) {
+      const tn = S.tracks[n]; if (!tn) continue;
+      const before = JSON.parse(JSON.stringify(tn.params || {}));
+      if (before[key] === undefined) before[key] = PARAM_FIELD_DEFAULTS[key];
+      tn.params = tn.params || defaultParams(tn.role);
+      tn.params[key] = value;
+      steps.push({ type: "params", label: "Detection setting", sid: S.sid, track: n, before: { params: before }, after: { params: JSON.parse(JSON.stringify(tn.params)) } });
+    }
+    pushGroup("Detection setting", steps);
+    const sid = S.sid;
+    for (const n of srcs) if (S.tracks[n]) hgSerial(n, () => B.paramsSet(sid, n, JSON.parse(JSON.stringify(S.tracks[n].params)))).then(() => setDirtyState(true));
+    return value;
+  }
   const before = JSON.parse(JSON.stringify(t.params || {}));
   if (before[key] === undefined) before[key] = PARAM_FIELD_DEFAULTS[key];   // the shown default is the undo's before
   t.params = t.params || defaultParams(t.role);

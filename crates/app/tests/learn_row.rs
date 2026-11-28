@@ -421,3 +421,20 @@ fn measure_one_learn_step_on_two_dense_files_of_ten_minutes() {
         m["learn_out_after"], ad["learn_out_after"]
     );
 }
+
+/// #587: the last mark wins on a copy too: Forget This and then Learn This on the same hit of file a leave file b one example
+/// of it (the "this" one), not both.
+#[test]
+fn a_hit_marked_again_on_the_other_file_replaces_its_copy() {
+    let r = row("lr_flip", 20, 0.3, 48_000, 48_000, None);
+    let t = first_of(&r, "a", &r.clicks);
+    r.svc.track_learn_mark(&r.sid, "a", "not", None, Some(t)).unwrap();
+    r.svc.track_learn_adopt(&r.sid, "b", "a", None).unwrap();
+    let m = r.svc.track_learn_mark(&r.sid, "a", "this", None, Some(t)).unwrap();
+    assert_eq!(m["flipped"], 1, "{m}");
+    let id = m["mark"]["id"].as_str().unwrap().to_string();
+    r.svc.track_learn_adopt(&r.sid, "b", "a", Some(&[id])).unwrap();
+    let row_b = learn_of(&r, "b")["row"].as_array().unwrap().clone();
+    assert_eq!(row_b.len(), 1, "{row_b:?}");
+    assert_eq!(row_b[0]["kind"], "this");
+}

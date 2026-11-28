@@ -113,10 +113,10 @@ function undoReveal(op, isUndo) {   // after an undo or redo: the track is selec
   if (wt !== null && (wt < S.view.t0 || wt > S.view.t1)) centerOn(wt);
   invalidateHits(w.track); updateStatus();
 }
-function applyOp(op, reverse) {   // a step of the service (shift, add, del, move, setv) answers a promise: true when it was applied
+function applyOp(op, reverse, inGroup) {   // a step of the service (shift, add, del, move, setv) answers a promise: true when it was applied
   if (op.type === "group") return groupApplyOp(op, reverse);   // #555: the steps of the sources of a DAW track, one undo step
   if (op.type === "vel") { DSShell.applyVel(op, reverse); updateStatus(); return; }   // P3-4b: Recompute Velocities, all tracks in one step
-  if (op.type === "learn") { lnApplyOp(op, reverse); return; }   // P4-6a: a Learn mark, removal, flip or Forget
+  if (op.type === "learn") return lnApplyOp(op, reverse, inGroup);   // P4-6a: a Learn mark, removal, flip or Forget; #587: inside a group it answers when the service did (undefined otherwise, as before)
   if (op.type === "tempo") { tmApplyOp(op, reverse); return; }   // P4-8: a change of the tempo and meter map
   if (op.type === "loud") { hgApplyLoudOp(op, reverse); return; }   // P4-3: the loudness histogram (floor, ceiling, cut)
   if (op.type === "trkdel") return trApplyOp(op, reverse);   // P4-39a: Track > Remove Track
@@ -137,11 +137,13 @@ function applyOp(op, reverse) {   // a step of the service (shift, add, del, mov
    step (a standalone project, or a row with one source) it is that step itself, so the standalone undo path is the one of today. */
 async function groupApplyOp(op, reverse, apply) {   // all or nothing: a refused step takes the steps before it back, so the stacks stay as the service is
   const list = reverse ? op.steps.slice().reverse() : op.steps, done = [];
-  const run = async (s, rev) => { try { const r = (apply || applyOp)(s, rev); return r === false ? false : r && typeof r.then === "function" ? !!(await r) : true; } catch (e) { return false; } };
+  const run = async (s, rev) => { try { const r = (apply || applyOp)(s, rev, true); return r === false ? false : r && typeof r.then === "function" ? !!(await r) : true; } catch (e) { return false; } };
+  const nameOf = s => trackLabel(s.track || (s.where && s.where.track) || "");
   for (const s of list) {
     if (await run(s, reverse)) { done.push(s); continue; }
-    for (const d of done.reverse()) await run(d, !reverse);
-    setMsg(`${reverse ? "undo" : "redo"}: a step of ${trackLabel(s.track || (s.where && s.where.track) || "")} was refused; the steps before it were taken back`);
+    const stuck = [];   // #587: a step that cannot be taken back is reported, not dropped
+    for (const d of done.reverse()) if (!(await run(d, !reverse))) stuck.push(d);
+    setMsg(`${reverse ? "undo" : "redo"}: a step of ${nameOf(s)} was refused; ${stuck.length ? `${stuck.length === 1 ? "a step" : `${stuck.length} steps`} before it could not be taken back (${stuck.map(nameOf).join(", ")}): check the hits` : "the steps before it were taken back"}`, stuck.length ? "error" : undefined);
     return false;
   }
   return true;
